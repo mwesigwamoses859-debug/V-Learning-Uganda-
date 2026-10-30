@@ -4,6 +4,10 @@ Free-access learning for Ugandan schools, with separate Primary (P1–P7) and Se
 
 Contact: **Tr Ojok Mtn · +256 778 441681**.
 
+## Interface
+
+The public interface follows the supplied Stitch “Equatorial Clarity” homepage reference: royal blue navigation, amber contact actions, white learning cards and Plus Jakarta Sans typography. The same tokens style the learning libraries, event pages and administrator publishing tools. The application uses its existing live API rather than placeholder content.
+
 ## Deployment
 
 Use Node.js 22 or later, run `npm ci`, then `npm run build`. Cloudflare Pages deploys `dist` from `main`. The build copies the API into `dist/_worker.js`; only `/api/*` invokes it.
