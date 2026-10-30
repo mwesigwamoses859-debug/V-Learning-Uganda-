@@ -20,7 +20,14 @@ async function digest(value) {
   return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
 }
 function same(a, b) { let difference = a.length ^ b.length; for (let i = 0; i < Math.max(a.length, b.length); i++) difference |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0); return difference === 0; }
-function configured(env) { return typeof env.ADMIN_PASSWORD === 'string' && env.ADMIN_PASSWORD.length >= 16 && env.ADMIN_PASSWORD.length <= 256; }
+function adminSetupIssue(env) {
+  if (env.ADMIN_PASSWORD === undefined || env.ADMIN_PASSWORD === null) return 'missing';
+  if (typeof env.ADMIN_PASSWORD !== 'string') return 'unavailable';
+  if (env.ADMIN_PASSWORD.length < 16) return 'too_short';
+  if (env.ADMIN_PASSWORD.length > 256) return 'too_long';
+  return null;
+}
+function configured(env) { return adminSetupIssue(env) === null; }
 async function initialize(db) {
   if (!schemaReady.has(db)) {
     const operation = db.batch(schema.map(sql => db.prepare(sql))).catch(error => { schemaReady.delete(db); throw error; });
@@ -141,11 +148,11 @@ async function media(request, env, id) {
 }
 async function api(request, env) {
   const url = new URL(request.url); const path = url.pathname.replace(/\/$/, ''); const method = request.method;
-  if (path === '/api/status' && method === 'GET') return json({ database: !!env.DB, storage: !!env.MEDIA, adminConfigured: configured(env), access: 'free' });
+  if (path === '/api/status' && method === 'GET') return json({ database: !!env.DB, storage: !!env.MEDIA, adminConfigured: configured(env), adminSetupIssue: adminSetupIssue(env), access: 'free' });
   need(env.DB, 503, 'The content library is being connected. Please try again shortly.');
   await initialize(env.DB);
   if (!['GET', 'HEAD'].includes(method)) csrf(request);
-  if (path === '/api/session' && method === 'GET') return json({ authenticated: !!await session(request, env), configured: configured(env) });
+  if (path === '/api/session' && method === 'GET') return json({ authenticated: !!await session(request, env), configured: configured(env), setupIssue: adminSetupIssue(env) });
   if (path === '/api/login' && method === 'POST') {
     need(configured(env), 503, 'The owner needs to activate administrator sign-in first.');
     const input = await bodyJSON(request, 4096);

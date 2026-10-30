@@ -67,3 +67,7 @@ test('durable content, file access, sessions and quizzes',async t=>{
   }finally{await mf.dispose();}
 });
 test('admin setup fails closed without a configured password',async()=>{const mf=runtime({});try{const status=await (await mf.dispatchFetch(origin+'/api/status')).json();assert.equal(status.adminConfigured,false);const r=await mf.dispatchFetch(origin+'/api/login',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify({password:'admin'})});assert.equal(r.status,503);}finally{await mf.dispose();}});
+
+for (const [label,value,issue] of [['short','test-only-short','too_short'],['long','x'.repeat(257),'too_long']]) {
+  test('reports '+label+' password setup without exposing it',async()=>{const mf=runtime({ADMIN_PASSWORD:value});try{const response=await mf.dispatchFetch(origin+'/api/status');const raw=await response.text();const status=JSON.parse(raw);assert.equal(status.adminConfigured,false);assert.equal(status.adminSetupIssue,issue);assert.equal(raw.includes(value),false);const session=await (await mf.dispatchFetch(origin+'/api/session')).json();assert.equal(session.configured,false);assert.equal(session.setupIssue,issue);}finally{await mf.dispose();}});
+}
