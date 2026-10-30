@@ -1,0 +1,4 @@
+import { copyFile, writeFile } from 'node:fs/promises';
+await copyFile(new URL('../server/worker.mjs', import.meta.url), new URL('../dist/_worker.js', import.meta.url));
+await writeFile(new URL('../dist/_routes.json', import.meta.url), JSON.stringify({version:1,include:['/api/*'],exclude:[]}));
+await writeFile(new URL('../dist/_headers', import.meta.url), `/*\n  X-Content-Type-Options: nosniff\n  X-Frame-Options: SAMEORIGIN\n  Referrer-Policy: strict-origin-when-cross-origin\n  Permissions-Policy: camera=(), microphone=(), geolocation=()\n  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; frame-src 'self'; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'\n`);

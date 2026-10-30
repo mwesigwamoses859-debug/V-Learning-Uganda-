@@ -1,486 +1,56 @@
-import React, { useState } from 'react';
-import { Navbar } from './components/Navbar';
-import { Hero } from './components/Hero';
-import { PrimarySection } from './components/PrimarySection';
-import { SecondarySection } from './components/SecondarySection';
-import { EventsSection } from './components/EventsSection';
-import { ResourcesSection } from './components/ResourcesSection';
-import { AboutContactSection } from './components/AboutContactSection';
-import { Footer } from './components/Footer';
-import { HomeView } from './components/HomeView';
+import React,{useEffect,useRef,useState} from 'react';
+import {ArrowRight,BookOpen,CalendarDays,Check,ChevronRight,Download,FileText,Gamepad2,Globe,GraduationCap,Layers,Menu,MessageCircle,Phone,Search,ShieldCheck,Video,X} from 'lucide-react';
+import {api} from './api';
+import {classes,CONTACT,Entry,kindLabel,mediaUrl} from './models';
+import Admin from './ui/Admin';
 
-// Modals
-import { LessonModal } from './components/LessonModal';
-import { KahootQuizModal } from './components/KahootQuizModal';
-import { AdminDashboardModal } from './components/AdminDashboardModal';
-import { EventRegistrationModal } from './components/EventRegistrationModal';
-import { EventDetailModal } from './components/EventDetailModal';
-import { AuthModal } from './components/AuthModal';
-import { TeacherUploadStudio } from './components/TeacherUploadStudio';
-import { StudentQuizSheet } from './components/StudentQuizSheet';
-import { AdminLoginModal } from './components/AdminLoginModal';
-import { ExamConverterStudio } from './components/ExamConverterStudio';
-
-import { 
-  Lesson, 
-  QuizQuestion, 
-  EventItem, 
-  PrimaryClass, 
-  AnyClass, 
-  ClassCurriculum, 
-  StudentQuizSubmission,
-  ExamPaper
-} from './types';
-import { 
-  PRIMARY_CURRICULUM, 
-  SECONDARY_CURRICULUM, 
-  KAHOOT_SAMPLE_QUESTIONS 
-} from './data/mockData';
-
-export function App() {
-  const [activeTab, setActiveTab] = useState('home');
-  const [primaryClassFilter, setPrimaryClassFilter] = useState<PrimaryClass>('P7');
-
-  // Dynamic Curricula (Live updates when teacher uploads new lessons!)
-  const [primaryData, setPrimaryData] = useState<ClassCurriculum[]>(PRIMARY_CURRICULUM);
-  const [secondaryData, setSecondaryData] = useState<ClassCurriculum[]>(SECONDARY_CURRICULUM);
-
-  // Lesson Player Modal
-  const [activeLesson, setActiveLesson] = useState<Lesson | null>(null);
-  
-  // Kahoot Quiz Modal State
-  const [isKahootOpen, setIsKahootOpen] = useState(false);
-  const [kahootQuestions, setKahootQuestions] = useState<QuizQuestion[]>(KAHOOT_SAMPLE_QUESTIONS);
-  const [kahootTitle, setKahootTitle] = useState('Uganda Kahoot Revision Challenge');
-
-  // School-Friendly In-Website Quiz Sheet State
-  const [isSchoolQuizOpen, setIsSchoolQuizOpen] = useState(false);
-  const [schoolQuizQuestions, setSchoolQuizQuestions] = useState<QuizQuestion[]>([]);
-  const [schoolQuizTitle, setSchoolQuizTitle] = useState('');
-
-  // SECURE EDUCATOR ACCESS (Hidden by default for customers!)
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [isAdminLoginOpen, setIsAdminLoginOpen] = useState(false);
-  const [isUploadStudioOpen, setIsUploadStudioOpen] = useState(false);
-  const [isAdminDashboardOpen, setIsAdminDashboardOpen] = useState(false);
-  const [isExamConverterOpen, setIsExamConverterOpen] = useState(false);
-
-  // Student Submissions Log (Gradebook)
-  const [studentSubmissions, setStudentSubmissions] = useState<StudentQuizSubmission[]>([]);
-
-  // Exam Papers List (Extracted online exams & PDF past papers)
-  const [examPapers, setExamPapers] = useState<ExamPaper[]>([
-    {
-      id: 'exam-1',
-      title: 'UNEB PLE 2025 Mathematics Candidate Mock Paper',
-      classLevel: 'P7',
-      level: 'primary',
-      subject: 'Mathematics',
-      year: '2025',
-      term: 'Candidate Mock Paper',
-      mode: 'interactive-extracted',
-      pdfFileName: 'UNEB_P7_Math_Mock_2025.pdf',
-      pdfFileSize: '3.8 MB',
-      questions: [
-        {
-          id: 'q1',
-          question: 'Evaluate: 3/4 + 1/2 in simplest fractional form.',
-          options: ['1 1/4 (5/4)', '4/6', '7/8', '2/3'],
-          correctAnswerIndex: 0,
-          explanation: 'Find LCD = 4: 3/4 + 2/4 = 5/4 = 1 1/4.',
-        },
-        {
-          id: 'q2',
-          question: 'Find the size of angle x if two angles on a straight line are (3x - 10)° and (2x + 40)°.',
-          options: ['30°', '45°', '25°', '50°'],
-          correctAnswerIndex: 0,
-          explanation: 'Angles on a straight line add up to 180°: 3x - 10 + 2x + 40 = 180 => 5x + 30 = 180 => 5x = 150 => x = 30°.',
-        },
-        {
-          id: 'q3',
-          question: 'A cyclist travelled from Kampala to Jinja, a distance of 80 km, in 2 hours. What was his average speed in km/h?',
-          options: ['40 km/h', '160 km/h', '30 km/h', '50 km/h'],
-          correctAnswerIndex: 0,
-          explanation: 'Speed = Distance / Time = 80 km / 2 h = 40 km/h.',
-        },
-        {
-          id: 'q4',
-          question: 'Express 0.0048 in standard scientific notation (A x 10^n).',
-          options: ['4.8 x 10^-3', '48 x 10^-4', '4.8 x 10^3', '0.48 x 10^-2'],
-          correctAnswerIndex: 0,
-          explanation: 'Move decimal point 3 places to the right: 4.8 x 10^-3.',
-        }
-      ],
-      durationMinutes: 120,
-      totalMarks: 20,
-      attemptsCount: 38,
-    }
-  ]);
-
-  // Event Modals
-  const [registeringEvent, setRegisteringEvent] = useState<EventItem | null>(null);
-  const [detailEvent, setDetailEvent] = useState<EventItem | null>(null);
-
-  // User Auth for normal customers/students
-  const [isAuthOpen, setIsAuthOpen] = useState(false);
-  const [user, setUser] = useState<{ name: string; phone: string; role: string } | null>(null);
-
-  // Handler: When teacher publishes a new video lesson from TeacherUploadStudio
-  const handlePublishLesson = (
-    newLesson: Lesson, 
-    classLevel: AnyClass, 
-    subjectName: string, 
-    topicName: string
-  ) => {
-    const isPrimary = classLevel.startsWith('P');
-
-    if (isPrimary) {
-      setPrimaryData((prev) => {
-        return prev.map((cls) => {
-          if (cls.classLevel === classLevel) {
-            let matchedSubject = cls.subjects.find((s) => s.name.toLowerCase() === subjectName.toLowerCase());
-            if (!matchedSubject && cls.subjects.length > 0) {
-              matchedSubject = cls.subjects[0];
-            }
-
-            if (matchedSubject) {
-              const updatedSubjects = cls.subjects.map((s) => {
-                if (s.id === matchedSubject!.id) {
-                  const existingTopic = s.topics.find((t) => t.name.toLowerCase() === topicName.toLowerCase());
-                  if (existingTopic) {
-                    return {
-                      ...s,
-                      topics: s.topics.map((t) => t.id === existingTopic.id ? { ...t, lessons: [newLesson, ...t.lessons] } : t)
-                    };
-                  } else {
-                    return {
-                      ...s,
-                      topics: [
-                        {
-                          id: `top-${Date.now()}`,
-                          name: topicName,
-                          lessons: [newLesson]
-                        },
-                        ...s.topics
-                      ]
-                    };
-                  }
-                }
-                return s;
-              });
-              return { ...cls, subjects: updatedSubjects };
-            }
-          }
-          return cls;
-        });
-      });
-    } else {
-      setSecondaryData((prev) => {
-        return prev.map((cls) => {
-          if (cls.classLevel === classLevel) {
-            let matchedSubject = cls.subjects.find((s) => s.name.toLowerCase() === subjectName.toLowerCase());
-            if (!matchedSubject && cls.subjects.length > 0) {
-              matchedSubject = cls.subjects[0];
-            }
-
-            if (matchedSubject) {
-              const updatedSubjects = cls.subjects.map((s) => {
-                if (s.id === matchedSubject!.id) {
-                  const existingTopic = s.topics.find((t) => t.name.toLowerCase() === topicName.toLowerCase());
-                  if (existingTopic) {
-                    return {
-                      ...s,
-                      topics: s.topics.map((t) => t.id === existingTopic.id ? { ...t, lessons: [newLesson, ...t.lessons] } : t)
-                    };
-                  } else {
-                    return {
-                      ...s,
-                      topics: [
-                        {
-                          id: `top-${Date.now()}`,
-                          name: topicName,
-                          lessons: [newLesson]
-                        },
-                        ...s.topics
-                      ]
-                    };
-                  }
-                }
-                return s;
-              });
-              return { ...cls, subjects: updatedSubjects };
-            }
-          }
-          return cls;
-        });
-      });
-    }
-  };
-
-  const handleDeployExam = (newExam: ExamPaper) => {
-    setExamPapers((prev) => [newExam, ...prev]);
-  };
-
-  const handleStartCustomKahoot = (questions: QuizQuestion[], title: string) => {
-    setKahootQuestions(questions);
-    setKahootTitle(title);
-    setIsKahootOpen(true);
-  };
-
-  const handleOpenDefaultKahoot = () => {
-    setKahootQuestions(KAHOOT_SAMPLE_QUESTIONS);
-    setKahootTitle('Uganda All-Subjects Kahoot Sprint');
-    setIsKahootOpen(true);
-  };
-
-  const handleStartSchoolQuiz = (questions: QuizQuestion[], title: string) => {
-    setSchoolQuizQuestions(questions);
-    setSchoolQuizTitle(title);
-    setIsSchoolQuizOpen(true);
-  };
-
-  const handleSchoolQuizSubmit = (submission: StudentQuizSubmission) => {
-    setStudentSubmissions((prev) => [submission, ...prev]);
-  };
-
-  const handleSearch = (query: string) => {
-    const qLower = query.toLowerCase();
-    if (qLower.includes('p1') || qLower.includes('p2') || qLower.includes('p3') || 
-        qLower.includes('p4') || qLower.includes('p5') || qLower.includes('p6') || 
-        qLower.includes('p7') || qLower.includes('primary') || qLower.includes('ple')) {
-      setActiveTab('primary');
-    } else if (qLower.includes('s1') || qLower.includes('s2') || qLower.includes('s3') || 
-               qLower.includes('s4') || qLower.includes('s5') || qLower.includes('s6') || 
-               qLower.includes('secondary') || qLower.includes('uce') || qLower.includes('uace')) {
-      setActiveTab('secondary');
-    } else if (qLower.includes('event') || qLower.includes('seminar') || qLower.includes('competition')) {
-      setActiveTab('events');
-    } else if (qLower.includes('paper') || qLower.includes('past') || qLower.includes('marking') || qLower.includes('resource') || qLower.includes('exam')) {
-      setActiveTab('resources');
-    } else {
-      setActiveTab('primary');
-    }
-    window.scrollTo({ top: 300, behavior: 'smooth' });
-  };
-
-  return (
-    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 antialiased selection:bg-amber-400 selection:text-black">
-      
-      {/* Main Navigation (Clean for customers; Admin tools only when verified) */}
-      <Navbar
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        onOpenKahoot={handleOpenDefaultKahoot}
-        onOpenDashboard={() => {
-          if (isAdmin) {
-            setIsAdminDashboardOpen(true);
-          } else {
-            setIsAdminLoginOpen(true);
-          }
-        }}
-        onOpenUploadStudio={() => {
-          if (isAdmin) {
-            setIsUploadStudioOpen(true);
-          } else {
-            setIsAdminLoginOpen(true);
-          }
-        }}
-        onOpenAuth={() => setIsAuthOpen(true)}
-        user={user}
-        isAdmin={isAdmin}
-        onAdminLogout={() => {
-          setIsAdmin(false);
-          setIsUploadStudioOpen(false);
-          setIsAdminDashboardOpen(false);
-          setIsExamConverterOpen(false);
-        }}
-      />
-
-      {/* Main Content Area */}
-      <main className="flex-1">
-        
-        {/* HOME VIEW: Clean, spacious, modern & uncluttered */}
-        {activeTab === 'home' && (
-          <HomeView
-            onNavigate={(tab, cls) => {
-              setActiveTab(tab);
-              if (cls) setPrimaryClassFilter(cls as PrimaryClass);
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-            onOpenKahoot={handleOpenDefaultKahoot}
-            onSearch={handleSearch}
-            onSelectLesson={(l) => setActiveLesson(l)}
-            onRegisterEvent={(e) => setRegisteringEvent(e)}
-          />
-        )}
-
-        {/* PRIMARY VIEW */}
-        {activeTab === 'primary' && (
-          <PrimarySection
-            curriculum={primaryData}
-            initialClass={primaryClassFilter}
-            onSelectLesson={(l) => setActiveLesson(l)}
-            onStartQuiz={(qs, title) => handleStartCustomKahoot(qs, title)}
-          />
-        )}
-
-        {/* SECONDARY VIEW */}
-        {activeTab === 'secondary' && (
-          <SecondarySection
-            curriculum={secondaryData}
-            initialClass="S4"
-            onSelectLesson={(l) => setActiveLesson(l)}
-            onStartQuiz={(qs, title) => handleStartCustomKahoot(qs, title)}
-          />
-        )}
-
-        {/* EVENTS VIEW */}
-        {activeTab === 'events' && (
-          <EventsSection
-            onRegisterEvent={(e) => setRegisteringEvent(e)}
-            onOpenEventDetail={(e) => setDetailEvent(e)}
-          />
-        )}
-
-        {/* RESOURCES & ONLINE EXAMS VIEW */}
-        {activeTab === 'resources' && (
-          <ResourcesSection
-            examPapers={examPapers}
-            onStartExam={(qs, title) => handleStartSchoolQuiz(qs, title)}
-          />
-        )}
-
-        {/* ABOUT & CONTACT VIEW */}
-        {(activeTab === 'about' || activeTab === 'contact') && (
-          <AboutContactSection />
-        )}
-
-      </main>
-
-      {/* Footer */}
-      <Footer
-        onNavigate={(tab, cls) => {
-          setActiveTab(tab);
-          if (cls) setPrimaryClassFilter(cls as PrimaryClass);
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-        onOpenDashboard={() => {
-          if (isAdmin) {
-            setIsAdminDashboardOpen(true);
-          } else {
-            setIsAdminLoginOpen(true);
-          }
-        }}
-        onOpenKahoot={handleOpenDefaultKahoot}
-        onOpenAdminLogin={() => setIsAdminLoginOpen(true)}
-        isAdmin={isAdmin}
-      />
-
-      {/* MODALS */}
-      {/* 1. Video & PDF Lesson Player Modal */}
-      <LessonModal
-        lesson={activeLesson}
-        onClose={() => setActiveLesson(null)}
-        onStartKahoot={(qs, title) => handleStartCustomKahoot(qs, title)}
-        onStartSchoolQuiz={(qs, title) => handleStartSchoolQuiz(qs, title)}
-      />
-
-      {/* 2. School-Friendly In-Website Student Quiz Sheet Modal */}
-      {isSchoolQuizOpen && (
-        <StudentQuizSheet
-          questions={schoolQuizQuestions}
-          lessonTitle={schoolQuizTitle}
-          onClose={() => setIsSchoolQuizOpen(false)}
-          onSubmitResults={handleSchoolQuizSubmit}
-        />
-      )}
-
-      {/* 3. Kahoot Quiz Arena Modal */}
-      {isKahootOpen && (
-        <KahootQuizModal
-          questions={kahootQuestions}
-          quizTitle={kahootTitle}
-          onClose={() => setIsKahootOpen(false)}
-        />
-      )}
-
-      {/* 4. Teacher Upload Studio Modal (Restricted to Admin) */}
-      {isAdmin && isUploadStudioOpen && (
-        <TeacherUploadStudio
-          onClose={() => setIsUploadStudioOpen(false)}
-          onPublishLesson={handlePublishLesson}
-        />
-      )}
-
-      {/* 5. Exam PDF Converter Studio Modal (Restricted to Admin) */}
-      {isAdmin && isExamConverterOpen && (
-        <ExamConverterStudio
-          onClose={() => setIsExamConverterOpen(false)}
-          onDeployExam={handleDeployExam}
-        />
-      )}
-
-      {/* 6. Teacher & Administrator Dashboard Modal (Restricted to Admin) */}
-      {isAdmin && isAdminDashboardOpen && (
-        <AdminDashboardModal
-          studentSubmissions={studentSubmissions}
-          examPapers={examPapers}
-          onOpenExamConverter={() => {
-            setIsAdminDashboardOpen(false);
-            setIsExamConverterOpen(true);
-          }}
-          onClose={() => setIsAdminDashboardOpen(false)}
-          onAddLesson={(lesson) => {
-            alert(`New lesson "${lesson.title}" added to ${lesson.classLevel} ${lesson.subject}!`);
-          }}
-          onAddEvent={(event) => {
-            alert(`New event "${event.title}" published!`);
-          }}
-        />
-      )}
-
-      {/* 7. Admin Security Login Modal (PIN Protected) */}
-      {isAdminLoginOpen && (
-        <AdminLoginModal
-          onClose={() => setIsAdminLoginOpen(false)}
-          onSuccess={() => {
-            setIsAdmin(true);
-            setIsAdminDashboardOpen(true);
-          }}
-        />
-      )}
-
-      {/* 8. Event Registration Modal */}
-      <EventRegistrationModal
-        event={registeringEvent}
-        onClose={() => setRegisteringEvent(null)}
-        onSuccess={(data) => {
-          console.log('Registered for event:', data);
-        }}
-      />
-
-      {/* 9. Event Details & Photo Gallery Modal */}
-      <EventDetailModal
-        event={detailEvent}
-        onClose={() => setDetailEvent(null)}
-        onRegister={(e) => {
-          setDetailEvent(null);
-          setRegisteringEvent(e);
-        }}
-      />
-
-      {/* 10. User Sign In / Register Modal for Customers/Students */}
-      {isAuthOpen && (
-        <AuthModal
-          onClose={() => setIsAuthOpen(false)}
-          onLogin={(u) => setUser(u)}
-          currentUser={user}
-          onLogout={() => setUser(null)}
-        />
-      )}
-
-    </div>
-  );
+const icons={lesson:Video,pdf:FileText,event:CalendarDays,quiz:Gamepad2};
+function readView(){return window.location.pathname.startsWith('/admin')?'admin':new URLSearchParams(window.location.search).get('view') || 'home';}
+function formatDate(date:string){if(!date)return 'Date to be announced';return new Intl.DateTimeFormat('en-UG',{day:'numeric',month:'long',year:'numeric',timeZone:'Africa/Kampala'}).format(new Date(date+'T12:00:00+03:00'));}
+function Empty({title='New learning materials are on the way.',children}:{title?:string;children?:React.ReactNode}) {return <div className="empty-state panel"><div className="empty-icon"><BookOpen size={28}/></div><h3>{title}</h3><p>{children || 'Published videos and PDFs from '+CONTACT.name+' will appear here. Check back soon or contact us for an update.'}</p></div>;}
+function Card({item,onOpen}:{item:Entry;onOpen:(item:Entry)=>void}) {
+  const Icon=icons[item.kind];
+  return <article className={'content-card panel '+item.kind}><button className="card-cover" aria-label={'Open '+item.title} onClick={()=>onOpen(item)}>{item.coverAssetId?<img loading="lazy" src={mediaUrl(item.coverAssetId)} alt=""/>:<><Icon size={38}/><span>{item.kind==='event'?item.eventType:kindLabel[item.kind]}</span></>}<span className="free-chip">Free</span></button><div className="card-body"><span className="eyebrow">{item.kind==='event'?item.eventType+' · '+(item.level==='all'?'All learners':item.level):item.classLevel+' · '+item.subject}</span><h3><button onClick={()=>onOpen(item)}>{item.title}</button></h3>{item.kind==='event'&&<p className="event-date"><CalendarDays size={15}/>{formatDate(item.date)}</p>}<p className="card-description">{item.description}</p><div className="card-bottom"><small>{item.teacherName || CONTACT.name}</small><button className="text-button" onClick={()=>onOpen(item)}>{item.kind==='lesson'?'Watch lesson':item.kind==='pdf'?'Open PDF':item.kind==='quiz'?'Start quiz':'View event'}<ArrowRight size={16}/></button></div></div></article>;
 }
-
-export default App;
+function PracticeQuiz({item}:{item:Entry}) {
+  const [answers,setAnswers]=useState<number[]>(Array((item.questions||[]).length).fill(-1)),[result,setResult]=useState<any>(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
+  return <div className="quiz"><div className="notice"><Gamepad2 size={21}/><span>Free practice · {item.questions.length} questions · Study at your own pace</span></div>{result&&<div className="quiz-result"><Check size={34}/><h2>{result.correct} out of {result.total} correct</h2><p>Review your answers and explanations below.</p></div>}
+    {item.questions.map((question,i)=><section className="quiz-question" key={i}><span className="eyebrow">QUESTION {i+1}</span><h3>{question.question}</h3><div className="answer-grid">{question.options.map((option,j)=><button key={j} disabled={!!result} className={'answer answer-'+j+(answers[i]===j?' selected':'')+(result?.review[i].answer===j?' correct':'')} onClick={()=>setAnswers(old=>old.map((a,k)=>k===i?j:a))}><span>{String.fromCharCode(65+j)}</span>{option}{result?.review[i].answer===j&&<Check size={18}/>}</button>)}</div>{result&&<p className={result.review[i].correct?'correct-text':'error-text'}>{result.review[i].correct?'Correct.':'Correct answer: '+String.fromCharCode(65+result.review[i].answer)+'.'} {result.review[i].explanation}</p>}</section>)}
+    {error&&<p role="alert" className="error-text">{error}</p>}{!result&&<button className="button" disabled={busy||answers.some(a=>a<0)} onClick={async()=>{setBusy(true);setError('');try{setResult(await api('/api/quiz/'+item.id+'/grade',{answers}));}catch(e){setError((e as Error).message);}finally{setBusy(false);}}}>{busy?'Checking answers…':'Submit answers'}</button>}{!result&&answers.some(a=>a<0)&&<p className="field-help">Choose one answer for every question to submit.</p>}
+  </div>;
+}
+function ContentDetail({item,onClose}:{item:Entry;onClose:()=>void}) {
+  const closeRef=useRef<HTMLButtonElement>(null);
+  useEffect(()=>{const previous=document.activeElement as HTMLElement;const overflow=document.body.style.overflow;document.body.style.overflow='hidden';closeRef.current?.focus();const listener=(e:KeyboardEvent)=>{if(e.key==='Escape')onClose();if(e.key==='Tab'){const nodes=closeRef.current?.closest('[role="dialog"]')?.querySelectorAll<HTMLElement>('button:not([disabled]),a[href],video,input,select,textarea,iframe');if(nodes?.length){const first=nodes[0],last=nodes[nodes.length-1];if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}}};document.addEventListener('keydown',listener);return()=>{document.body.style.overflow=overflow;document.removeEventListener('keydown',listener);previous?.focus();};},[item.id]);
+  return <div className="modal-backdrop" onClick={onClose}><section className="content-modal" role="dialog" aria-modal="true" aria-labelledby="detail-title" onClick={e=>e.stopPropagation()}><div className="modal-top"><span className="badge">{kindLabel[item.kind]} · Free access</span><button ref={closeRef} className="icon-button" aria-label="Close details" onClick={onClose}><X/></button></div><div className="detail-body"><span className="eyebrow">{item.kind==='event'?item.eventType:item.classLevel+' · '+item.subject}</span><h1 id="detail-title">{item.title}</h1><p className="muted">By {item.teacherName || CONTACT.name}{item.topic?' · '+item.topic:''}</p>
+    {item.videoAssetId&&<video className="lesson-player" controls playsInline preload="none" poster={item.coverAssetId?mediaUrl(item.coverAssetId):undefined} src={mediaUrl(item.videoAssetId)} onLoadedMetadata={e=>{try{const t=Number(localStorage.getItem('vl-video-'+item.id));if(t>0&&t<e.currentTarget.duration)e.currentTarget.currentTime=t;}catch{}}} onPause={e=>{try{localStorage.setItem('vl-video-'+item.id,String(e.currentTarget.currentTime));}catch{}}}>Your browser cannot play this video. <a href={mediaUrl(item.videoAssetId,true)}>Download the video</a>.</video>}
+    {item.kind==='event'&&<div className="event-info"><p><CalendarDays size={18}/><strong>{formatDate(item.date)}</strong>{item.time?' · '+item.time+' EAT':''}</p>{item.venue&&<p>{item.venue}</p>}<p>Contact <a href={'tel:'+CONTACT.tel}>{CONTACT.name} · {CONTACT.phone}</a> for event enquiries.</p></div>}
+    <p className="detail-description">{item.description}</p>
+    {item.pdfAssetId&&<div className="pdf-download"><FileText size={28}/><div><strong>{item.kind==='pdf'?'Learning material':'Supporting PDF'}</strong><small>Read online or download for offline revision.</small></div><a className="button secondary" href={mediaUrl(item.pdfAssetId)} target="_blank" rel="noopener noreferrer">Open PDF</a><a className="button" href={mediaUrl(item.pdfAssetId,true)}><Download size={16}/>Download</a></div>}
+    {!!item.galleryAssetIds?.length&&<section><h2>Event photos</h2><div className="photo-gallery">{item.galleryAssetIds.map((id,i)=><a href={mediaUrl(id)} target="_blank" rel="noopener noreferrer" key={id}><img loading="lazy" src={mediaUrl(id)} alt={item.title+' — event photo '+(i+1)}/></a>)}</div></section>}
+    {item.kind==='quiz'&&<PracticeQuiz item={item}/>}
+  </div></section></div>;
+}
+export default function App(){
+  const [view,setView]=useState(readView),[mobile,setMobile]=useState(false),[items,setItems]=useState<Entry[]>([]),[loading,setLoading]=useState(true),[error,setError]=useState(''),[selected,setSelected]=useState<Entry|null>(null),[classFilter,setClassFilter]=useState('all'),[subject,setSubject]=useState('all'),[kind,setKind]=useState('all'),[query,setQuery]=useState(''),[eventType,setEventType]=useState('all');
+  const load=async()=>{setError('');setLoading(true);try{const data=await api('/api/content');setItems(data.items);}catch(e){setError((e as Error).message);}finally{setLoading(false);}};
+  useEffect(()=>{load();const pop=()=>{setView(readView());setMobile(false);};window.addEventListener('popstate',pop);return()=>window.removeEventListener('popstate',pop);},[]);
+  function navigate(next:string){window.history.pushState({},'',next==='admin'?'/admin':next==='home'?'/':'/?view='+next);setView(next);setClassFilter('all');setSubject('all');setQuery('');setKind('all');setMobile(false);window.scrollTo({top:0,behavior:'smooth'});}
+  const isLearning=['primary','secondary','resources','quiz'].includes(view);
+  const levelItems=items.filter(x=>x.kind!=='event'&&(!['primary','secondary'].includes(view)||x.level===view));
+  const subjects=[...new Set(levelItems.filter(x=>classFilter==='all'||x.classLevel===classFilter).map(x=>x.subject).filter(Boolean))].sort();
+  const filtered=levelItems.filter(x=>(classFilter==='all'||x.classLevel===classFilter)&&(subject==='all'||x.subject===subject)&&(kind==='all'||x.kind===kind)&&(view!=='resources'||x.kind==='pdf')&&(view!=='quiz'||x.kind==='quiz')&&(x.title+' '+x.subject+' '+x.topic+' '+x.classLevel).toLowerCase().includes(query.toLowerCase()));
+  const events=items.filter(x=>x.kind==='event'&&(eventType==='all'||x.eventType===eventType)).sort((a,b)=>b.date.localeCompare(a.date));
+  const tabs=[{id:'home',name:'Home'},{id:'primary',name:'Primary'},{id:'secondary',name:'Secondary'},{id:'events',name:'Events'},{id:'resources',name:'PDF library'},{id:'quiz',name:'Quiz Arena'}];
+  return <div className="site"><div className="announcement"><span className="uganda-mark"><i/><i/><i/></span>For Ugandan schools & learners <span className="announcement-divider">·</span><strong>Free access for everyone, for now</strong></div><header className="site-header"><div className="header-inner"><a href="/" className="brand" onClick={e=>{e.preventDefault();navigate('home');}}><span className="brand-icon"><GraduationCap size={26}/></span><span><strong>V-LEARNING<span>UGANDA</span></strong><small>Learn anywhere. Achieve more.</small></span></a><button className="icon-button menu-toggle" aria-label="Toggle navigation" aria-expanded={mobile} onClick={()=>setMobile(!mobile)}>{mobile?<X/>:<Menu/>}</button><nav aria-label="Main navigation" className={mobile?'open':''}>{tabs.map(tab=><a key={tab.id} href={tab.id==='home'?'/':'/?view='+tab.id} className={view===tab.id?'active':''} onClick={e=>{e.preventDefault();navigate(tab.id);}}>{tab.name}</a>)}</nav><a className="header-contact" href={'tel:'+CONTACT.tel} aria-label={'Call '+CONTACT.name}><Phone size={18}/><span>Ask Tr Ojok</span></a></div></header>
+    <main>{view==='home'?<><section className="hero"><div className="hero-copy"><span className="eyebrow"><span className="green-dot"/>LEARNING WITHOUT BARRIERS</span><h1>Big ambitions.<br/><em>Open possibilities.</em></h1><p>Video lessons, PDF notes and practice quizzes for Primary and Secondary learners across Uganda. Learn at your pace, wherever you are.</p><div className="hero-actions"><button className="button" onClick={()=>navigate('primary')}>Explore Primary<ArrowRight size={18}/></button><button className="button secondary" onClick={()=>navigate('secondary')}>Explore Secondary<ArrowRight size={18}/></button></div><div className="hero-assurances"><span><Check size={15}/>Free to watch & download</span><span><Check size={15}/>No learner sign-up needed</span></div></div><div className="learning-visual" aria-label="Primary and Secondary learning, connected through V-Learning Uganda"><div className="visual-label"><BookOpen size={18}/>YOUR CLASSROOM, ANYWHERE</div><div className="visual-primary"><span>P1—P7</span><GraduationCap size={40}/><strong>Primary</strong><small>A strong foundation<br/>for every learner.</small><span className="visual-line"/></div><div className="visual-secondary"><span>S1—S6</span><Layers size={35}/><strong>Secondary</strong><small>Build knowledge.<br/>Go further.</small></div><div className="visual-free"><span><ShieldCheck size={21}/></span><div><strong>Education within reach</strong><small>Open access. Real learning.</small></div></div><div className="visual-grid"/></div></section>
+      <section className="section"><div className="section-heading"><div><span className="eyebrow">FIND YOUR PATH</span><h2>A space for every stage.</h2></div><p className="section-note">Separate libraries. One shared purpose.</p></div><div className="path-grid"><button className="path-card primary-path" onClick={()=>navigate('primary')}><div className="path-top"><GraduationCap size={29}/><span>01</span></div><h3>Primary learning</h3><p>Explore videos, notes and practice by class, subject and topic.</p><div><strong>P1 · P2 · P3 · P4 · P5 · P6 · P7</strong><ArrowRight/></div></button><button className="path-card secondary-path" onClick={()=>navigate('secondary')}><div className="path-top"><Layers size={29}/><span>02</span></div><h3>Secondary learning</h3><p>Find O-Level and A-Level lessons and revision materials.</p><div><strong>S1 · S2 · S3 · S4 · S5 · S6</strong><ArrowRight/></div></button><button className="path-card events-path" onClick={()=>navigate('events')}><div className="path-top"><CalendarDays size={29}/><span>03</span></div><h3>Beyond the lesson</h3><p>Quiz events, seminars, workshops, photos and recordings.</p><div><strong>Explore school events</strong><ArrowRight/></div></button></div></section>
+      <section className="section library-home"><div className="section-heading"><div><span className="eyebrow">THE LEARNING LIBRARY</span><h2>Published by your educators.</h2></div><button className="text-button" onClick={()=>navigate('resources')}>Browse PDF library<ArrowRight size={17}/></button></div>{loading?<p className="muted">Loading the learning library…</p>:error?<div className="alert error" role="alert">{error}<button className="text-button" onClick={load}>Try again</button></div>:items.filter(x=>x.kind!=='event').length?<div className="content-grid">{items.filter(x=>x.kind!=='event').slice(0,3).map(item=><Card key={item.id} item={item} onOpen={setSelected}/>)}</div>:<Empty/>}</section>
+      <section className="how-it-works section"><span className="eyebrow">SIMPLE BY DESIGN</span><h2>Choose. Learn. Keep growing.</h2><div><article><span>01</span><h3>Find your class</h3><p>Choose Primary or Secondary, then filter by your class and subject.</p></article><article><span>02</span><h3>Learn your way</h3><p>Watch a published video or download PDF notes for offline revision.</p></article><article><span>03</span><h3>Put it into practice</h3><p>Try educator-published quizzes and look out for school events.</p></article></div></section></>:view==='admin'?<div className="section"><Admin onChanged={load}/></div>:isLearning?<section className="section library-page"><div className="page-heading"><div><span className="eyebrow">FREE LEARNING · UGANDA</span><h1>{view==='primary'?'Primary learning':view==='secondary'?'Secondary learning':view==='quiz'?'Quiz Arena':'PDF library'}</h1><p>{view==='primary'?'P1 to P7 · A strong foundation, one lesson at a time.':view==='secondary'?'S1 to S6 · O-Level and A-Level learning materials.':view==='quiz'?'Educator-published practice quizzes, with instant feedback.':'Read online or download published notes and question papers.'}</p></div><span className="badge free-badge"><Globe size={15}/>Free access</span></div>
+        {(view==='primary'||view==='secondary')&&<div className="class-tabs"><button className={classFilter==='all'?'active':''} onClick={()=>{setClassFilter('all');setSubject('all');}}>All classes</button>{classes(view).map(c=><button key={c} className={classFilter===c?'active':''} onClick={()=>{setClassFilter(c);setSubject('all');}}>{c}{c==='P7'?' · PLE':c==='S4'?' · UCE':c==='S6'?' · UACE':''}</button>)}</div>}
+        <div className="library-filters"><label className="search-field"><Search size={18}/><input aria-label="Search learning materials" placeholder="Search titles, subjects or topics…" value={query} onChange={e=>setQuery(e.target.value)}/></label><label className="filter-select"><span>Subject</span><select aria-label="Filter by subject" value={subject} onChange={e=>setSubject(e.target.value)}><option value="all">All subjects</option>{subjects.map(s=><option key={s}>{s}</option>)}</select></label>{['primary','secondary'].includes(view)&&<label className="filter-select"><span>Material</span><select aria-label="Filter by material" value={kind} onChange={e=>setKind(e.target.value)}><option value="all">All materials</option><option value="lesson">Video lessons</option><option value="pdf">PDF resources</option><option value="quiz">Practice quizzes</option></select></label>}</div>
+        {loading?<p>Loading learning materials…</p>:error?<div className="alert error" role="alert">{error}<button onClick={load}>Try again</button></div>:filtered.length?<><p className="result-count">{filtered.length} published material{filtered.length===1?'':'s'}</p><div className="content-grid">{filtered.map(item=><Card key={item.id} item={item} onOpen={setSelected}/>)}</div></>:<Empty title={query||subject!=='all'?'No materials match these filters.':view==='quiz'?'Your next challenge is on its way.':'This learning library is being prepared.'}>{query||subject!=='all'?'Try another subject or search term.':'Only materials published by '+CONTACT.name+' will appear here. All are free to access.'}</Empty>}
+      </section>:view==='events'?<section className="section library-page"><div className="page-heading"><div><span className="eyebrow">CONNECT · PARTICIPATE · LEARN</span><h1>School events & shared moments.</h1><p>Find confirmed quiz events and seminars, plus photos and videos published by the organiser.</p></div><CalendarDays className="page-heading-icon" size={46}/></div><div className="class-tabs">{['all','Quiz','Seminar','Workshop','Other'].map(type=><button key={type} className={eventType===type?'active':''} onClick={()=>setEventType(type)}>{type==='all'?'All events':type==='Quiz'?'Quiz events':type+'s'}</button>)}</div>{loading?<p>Loading events…</p>:error?<div className="alert error" role="alert">{error}<button onClick={load}>Try again</button></div>:events.length?<div className="content-grid">{events.map(item=><Card key={item.id} item={item} onOpen={setSelected}/>)}</div>:<Empty title="The next event will be announced here.">No events have been published in this category yet. Contact {CONTACT.name} for enquiries about quizzes and seminars.</Empty>}</section>:<section className="section"><h1>Page not found</h1><button className="button" onClick={()=>navigate('home')}>Return home</button></section>}
+    </main><section className="contact-band" id="contact"><div><span className="eyebrow">A REAL PERSON. A HELPING HAND.</span><h2>Talk to Tr Ojok.</h2><p>Questions about lessons, PDFs or school events? Get in touch.</p></div><div><a className="button" href={'tel:'+CONTACT.tel}><Phone size={18}/>{CONTACT.phone}</a><a className="button secondary" href={CONTACT.whatsapp} target="_blank" rel="noopener noreferrer"><MessageCircle size={18}/>WhatsApp</a></div></section><footer className="site-footer"><div><strong>V-LEARNING UGANDA</strong><p>Learning for Ugandan schools, wherever you are.</p><small>© {new Date().getFullYear()} V-Learning Uganda · Contact: {CONTACT.name}</small></div><div><span className="badge">All published materials are free for now</span><a href="/admin" onClick={e=>{e.preventDefault();navigate('admin');}}>Administrator dashboard<ChevronRight size={15}/></a></div></footer>{selected&&<ContentDetail key={selected.id} item={selected} onClose={()=>setSelected(null)}/>}
+  </div>;
+}
