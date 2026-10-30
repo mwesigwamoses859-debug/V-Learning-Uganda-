@@ -16,9 +16,13 @@ Production Pages bindings:
 
 The API creates its empty database schema automatically. No example content is seeded. R2 stays private; files are served only when attached to published content or requested by an authenticated administrator.
 
+## Local development
+
+Run `npm ci`, then `npm run dev`. This starts Vite with an isolated, empty Miniflare D1/R2 API. It never connects to the production database or bucket. Set `LOCAL_ADMIN_PASSWORD` to choose a development password; the default is the non-production fixture shown in `scripts/dev-server.mjs`. Local data is discarded when the server stops. Production secrets and Cloudflare bindings are only used by the deployed worker.
+
 ## Administrator workflow
 
-Open `/admin`. Create a video lesson, PDF resource, practice quiz or event. Choose Primary or Secondary, select the class and enter a subject/topic. Upload actual files and save a private draft or publish for free. To unpublish, edit the item and choose **Save draft**. Stored content persists beyond the browser session. There is no permanent-delete control in this release.
+Open `/admin` to enter the School Office. Use the sidebar to manage videos, PDFs, quizzes, events or private drafts. The Overview shows actual published counts, recently updated items and publishing shortcuts. Search and filter a content section by school level or publication status. Create a video lesson, PDF resource, practice quiz or event. Choose Primary or Secondary, select the class and enter a subject/topic. Upload actual files and save a private draft or publish for free. To unpublish, edit the item and choose **Save draft**. Stored content persists beyond the browser session. There is no permanent-delete control in this release.
 
 Videos: MP4, WebM or MOV up to 1 GB. PDFs: up to 25 MB. Photos: JPG, PNG or WebP up to 10 MB each, with up to 24 photos per event. Videos above 8 MB use multipart chunks within an upload session; interrupted page sessions must restart. Native playback supports byte ranges. Compressed MP4 is recommended for mobile data; adaptive transcoding is not included.
 
