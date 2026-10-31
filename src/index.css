@@ -48,10 +48,10 @@
 .youtube-classroom-link:hover{color:var(--primary);border-bottom-color:var(--brand)}
 .youtube-classroom-link>svg:last-child{width:15px;transform:rotate(-35deg)}
 .footer-actions>.footer-youtube{background:var(--accent-soft);color:var(--accent)}
-.photo-credits{font-size:11px;color:#7a7580;line-height:1.7;margin-top:22px}
-.photo-credits a{text-decoration:underline;text-underline-offset:3px}
+
+
 @media(max-width:1050px){.photo-visual{height:420px}.student-photo-main{top:45px;height:267px}.student-photo-classroom{height:150px}.student-photo-message{padding:13px;min-height:132px}.student-photo-message strong{font-size:12px}.student-photo-message small{font-size:10px}.youtube-classroom-link{font-size:12px}}
-@media(max-width:760px){.photo-visual{height:380px;padding:0}.photo-visual .visual-label{left:5px;font-size:10px}.student-photo-main{left:5px;right:5px;top:39px;height:239px;border-width:5px}.student-photo-classroom{bottom:4px;width:53%;height:143px;border-width:5px}.student-photo-message{bottom:5px;right:0;width:44%;min-height:124px;padding:12px}.student-photo-message>span{width:28px;height:28px;margin-bottom:8px}.student-photo-message strong{font-size:12px}.student-photo-message small{font-size:10px}.youtube-classroom-link{font-size:13px;margin-top:18px}.photo-credits{font-size:11px;margin-top:20px}}
+@media(max-width:760px){.photo-visual{height:380px;padding:0}.photo-visual .visual-label{left:5px;font-size:10px}.student-photo-main{left:5px;right:5px;top:39px;height:239px;border-width:5px}.student-photo-classroom{bottom:4px;width:53%;height:143px;border-width:5px}.student-photo-message{bottom:5px;right:0;width:44%;min-height:124px;padding:12px}.student-photo-message>span{width:28px;height:28px;margin-bottom:8px}.student-photo-message strong{font-size:12px}.student-photo-message small{font-size:10px}.youtube-classroom-link{font-size:13px;margin-top:18px}}
 @media(max-width:380px){.photo-visual{height:355px}.student-photo-main{height:221px}.student-photo-classroom{height:130px}.student-photo-message{padding:11px;min-height:120px}.student-photo-message strong{font-size:11px}.student-photo-message small{font-size:10px}}
 
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
