@@ -15,6 +15,16 @@ const schema = [
   `CREATE INDEX IF NOT EXISTS learner_session_expiry ON learner_sessions(expires)`,
   `CREATE TABLE IF NOT EXISTS learner_attempts (id TEXT PRIMARY KEY, attempts INTEGER NOT NULL, expires INTEGER NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS learner_attempt_expiry ON learner_attempts(expires)`,
+  `CREATE TABLE IF NOT EXISTS learner_bookmarks (learner_id TEXT NOT NULL, content_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(learner_id, content_id))`,
+  `CREATE TABLE IF NOT EXISTS learner_progress (learner_id TEXT NOT NULL, content_id TEXT NOT NULL, video_asset_id TEXT NOT NULL, position REAL NOT NULL, duration REAL NOT NULL, completed INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, PRIMARY KEY(learner_id, content_id))`,
+  `CREATE TABLE IF NOT EXISTS learner_quiz_results (id TEXT PRIMARY KEY, learner_id TEXT NOT NULL, content_id TEXT NOT NULL, submission_id TEXT NOT NULL, correct INTEGER NOT NULL, total INTEGER NOT NULL, snapshot TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(learner_id, submission_id))`,
+  `CREATE INDEX IF NOT EXISTS learner_results_owner ON learner_quiz_results(learner_id, created_at)`,
+  `CREATE TABLE IF NOT EXISTS learner_activity (learner_id TEXT PRIMARY KEY, last_login TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS announcements (id TEXT PRIMARY KEY, status TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, level TEXT NOT NULL, class_level TEXT NOT NULL, pinned INTEGER NOT NULL DEFAULT 0, expires_on TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS announcement_status ON announcements(status, pinned, created_at)`,
+  `CREATE TABLE IF NOT EXISTS event_registrations (id TEXT PRIMARY KEY, learner_id TEXT NOT NULL, event_id TEXT NOT NULL, participants INTEGER NOT NULL, data TEXT NOT NULL, state TEXT NOT NULL, attended INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(learner_id, event_id))`,
+  `CREATE INDEX IF NOT EXISTS registration_event ON event_registrations(event_id, state)`,
+  `CREATE INDEX IF NOT EXISTS registration_owner ON event_registrations(learner_id, created_at)`,
 ];
 class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
 function need(condition, status, message) { if (!condition) throw new HttpError(status, message); }
@@ -133,6 +143,7 @@ async function issueLearnerSession(request, env, row) {
   const token = randomHex(32); const now = Date.now(); const previous = learnerToken(request);
   await env.DB.batch([
     env.DB.prepare('DELETE FROM learner_sessions WHERE expires <= ?').bind(now),
+    env.DB.prepare('INSERT INTO learner_activity(learner_id,last_login) VALUES (?,?) ON CONFLICT(learner_id) DO UPDATE SET last_login=excluded.last_login').bind(row.id,new Date(now).toISOString()),
     ...(previous ? [env.DB.prepare('DELETE FROM learner_sessions WHERE token_hash = ?').bind(await digest(previous))] : []),
     // Capture the verified credential version; a concurrent password reset invalidates this session too.
     env.DB.prepare('INSERT INTO learner_sessions(token_hash, learner_id, credential_version, expires) VALUES (?, ?, ?, ?)').bind(await digest(token), row.id, row.credential_version, now + LEARNER_TTL),
@@ -220,7 +231,7 @@ async function learnerAPI(request, env, path, method) {
     await env.DB.prepare('DELETE FROM learner_sessions WHERE learner_id = ?').bind(row.id).run();
     return json({ learner: null }, 200, { 'Set-Cookie': clearLearnerCookie });
   }
-  throw new HttpError(404, 'Account page not found.');
+  return learningLearnerAPI(request, env, path, method);
 }
 const text = (value, max = 200) => String(value ?? '').trim().slice(0, max);
 function sanitize(entry, isAdmin = false) {
@@ -228,6 +239,19 @@ function sanitize(entry, isAdmin = false) {
   if (!isAdmin && data.questions) data.questions = data.questions.map(({ question, options }) => ({ question, options }));
   return { ...data, id: entry.id, kind: entry.kind, status: entry.status, access: 'free', priceUGX: 0, createdAt: entry.created_at, updatedAt: entry.updated_at };
 }
+async function catalog(env, rows, isAdmin = false) {
+  if (!rows.length) return [];
+  const assetRows = await env.DB.prepare(`SELECT DISTINCT a.id,a.name,a.mime,a.size FROM assets a JOIN content_assets ca ON ca.asset_id=a.id JOIN content c ON c.id=ca.content_id WHERE a.state='ready' AND (a.mime LIKE 'video/%' OR a.mime='application/pdf') ${isAdmin ? '' : "AND c.status='published'"}`).all();
+  const info = new Map(assetRows.results.map(asset => [asset.id, asset]));
+  const registrations = await env.DB.prepare("SELECT event_id,SUM(participants) AS participants FROM event_registrations WHERE state='registered' GROUP BY event_id").all();
+  const counts = new Map(registrations.results.map(row => [row.event_id, row.participants]));
+  return rows.map(row => {
+    const item = sanitize(row, isAdmin); const ids = [item.videoAssetId, item.lowDataVideoAssetId, item.pdfAssetId].filter(Boolean);
+    return { ...item, mediaInfo: Object.fromEntries(ids.filter(id => info.has(id)).map(id => [id, info.get(id)])), ...(item.kind === 'event' ? { registeredParticipants: counts.get(item.id) || 0 } : {}) };
+  });
+}
+function validDate(value) { return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value)) && new Date(value+'T12:00:00Z').toISOString().slice(0,10) === value; }
+function ugandaDate() { return new Date(Date.now()+10800000).toISOString().slice(0,10); }
 function validateContent(input) {
   const kind = input.kind; const status = input.status === 'published' ? 'published' : 'draft';
   need(['lesson', 'pdf', 'event', 'quiz'].includes(kind), 400, 'Choose a valid content type.');
@@ -238,11 +262,25 @@ function validateContent(input) {
   if (kind !== 'event') need((level === 'primary' ? /^P[1-7]$/ : /^S[1-6]$/).test(classLevel), 400, 'Choose a class in the selected school level.');
   const subject = text(input.subject, 100); if (kind !== 'event') need(subject.length > 0, 400, 'Enter the subject.');
   const data = { title, description: text(input.description, 10000), level, classLevel, subject, topic: text(input.topic, 150), teacherName: text(input.teacherName, 100) || 'Tr Ojok Mtn', access: 'free', priceUGX: 0,
-    videoAssetId: text(input.videoAssetId, 36), pdfAssetId: text(input.pdfAssetId, 36), coverAssetId: text(input.coverAssetId, 36), galleryAssetIds: Array.isArray(input.galleryAssetIds) ? [...new Set(input.galleryAssetIds.map(x => text(x, 36)))].slice(0, 24) : [],
+    videoAssetId: text(input.videoAssetId, 36), lowDataVideoAssetId: text(input.lowDataVideoAssetId, 36), pdfAssetId: text(input.pdfAssetId, 36), coverAssetId: text(input.coverAssetId, 36), galleryAssetIds: Array.isArray(input.galleryAssetIds) ? [...new Set(input.galleryAssetIds.map(x => text(x, 36)))].slice(0, 24) : [],
     eventType: ['Quiz', 'Seminar', 'Workshop', 'Other'].includes(input.eventType) ? input.eventType : 'Seminar', date: text(input.date, 10), time: text(input.time, 5), venue: text(input.venue, 200) };
   if (kind === 'event') {
-    need(!data.date || /^\d{4}-\d{2}-\d{2}$/.test(data.date), 400, 'Enter a valid event date.');
-    need(!data.time || /^\d{2}:\d{2}$/.test(data.time), 400, 'Enter a valid event time.');
+    need(!data.date || validDate(data.date), 400, 'Enter a valid event date.');
+    need(!data.time || /^([01]\d|2[0-3]):[0-5]\d$/.test(data.time), 400, 'Enter a valid event time.');
+    data.registrationOpen = input.registrationOpen === true;
+    data.registrationCapacity = Number(input.registrationCapacity || 0);
+    data.registrationDeadline = text(input.registrationDeadline, 10);
+    need(Number.isInteger(data.registrationCapacity) && data.registrationCapacity >= 0 && data.registrationCapacity <= 100000, 400, 'Capacity must be a whole number of places, or zero for no limit.');
+    need(!data.registrationDeadline || (validDate(data.registrationDeadline) && (!data.date || data.registrationDeadline <= data.date)), 400, 'Choose a registration deadline on or before the event date.');
+    if (data.registrationOpen && status === 'published') need(data.date, 400, 'Set the confirmed event date before opening registrations.');
+  }
+  if (input.examType && kind !== 'event') {
+    data.examType = input.examType; data.examYear = Number(input.examYear); data.revisionType = input.revisionType;
+    const examClasses = { PLE: 'P7', UCE: 'S4', UACE: 'S6' };
+    need(examClasses[data.examType] === classLevel, 400, 'Use P7 for PLE, S4 for UCE or S6 for UACE.');
+    need(Number.isInteger(data.examYear) && data.examYear >= 1960 && data.examYear <= new Date().getUTCFullYear()+1, 400, 'Enter a valid exam or revision year.');
+    need(['paper','answers','revision'].includes(data.revisionType), 400, 'Choose paper, answers or revision lesson.');
+    need(data.revisionType === 'revision' || kind === 'pdf', 400, 'Exam papers and answer guides must be PDF resources.');
   }
   if (kind === 'quiz') {
     need(Array.isArray(input.questions) && input.questions.length <= 100, 400, 'A quiz may contain up to 100 questions.');
@@ -257,9 +295,140 @@ function validateContent(input) {
     if (kind === 'pdf') need(data.pdfAssetId, 400, 'Upload a PDF before publishing.');
     if (kind === 'quiz') need(data.questions.length, 400, 'Add at least one question before publishing.');
   }
-  const references = [[data.videoAssetId, 'video/'], [data.pdfAssetId, 'application/pdf'], [data.coverAssetId, 'image/'], ...data.galleryAssetIds.map(id => [id, 'image/'])].filter(([id]) => id);
+  need(!data.lowDataVideoAssetId || data.lowDataVideoAssetId !== data.videoAssetId, 400, 'Upload a separate, smaller video for data saving.');
+  const references = [[data.videoAssetId, 'video/'], [data.lowDataVideoAssetId, 'video/'], [data.pdfAssetId, 'application/pdf'], [data.coverAssetId, 'image/'], ...data.galleryAssetIds.map(id => [id, 'image/'])].filter(([id]) => id);
   return { kind, status, data, references };
 }
+function announcementItem(row) { return {id:row.id,status:row.status,title:row.title,body:row.body,level:row.level,classLevel:row.class_level,pinned:!!row.pinned,expiresOn:row.expires_on,createdAt:row.created_at,updatedAt:row.updated_at}; }
+async function publishedContent(env,id,kind) {
+  const row = await env.DB.prepare("SELECT * FROM content WHERE id=? AND status='published'").bind(id).first();
+  need(row && (!kind || row.kind === kind),404,'This published material is no longer available.'); return row;
+}
+function progressItem(row,entry) {
+  return row && row.video_asset_id === JSON.parse(entry.data).videoAssetId ? {position:row.position,duration:row.duration,completed:!!row.completed,updatedAt:row.updated_at} : null;
+}
+async function learningLearnerAPI(request,env,path,method) {
+  need(['/api/learner/library','/api/learner/results','/api/learner/registrations'].includes(path) || /^\/api\/learner\/(item|bookmarks|progress|registrations|results)\/[a-f0-9-]{36}(\/cancel)?$/.test(path),404,'Account page not found.');
+  const row = await learnerSession(request,env); need(row,401,'Please log in to your learner account.');
+  if(path === '/api/learner/library' && method === 'GET') {
+    const saved = await env.DB.prepare("SELECT c.*,b.created_at AS saved_at FROM learner_bookmarks b JOIN content c ON c.id=b.content_id WHERE b.learner_id=? AND c.status='published' ORDER BY b.created_at DESC").bind(row.id).all();
+    const progress = await env.DB.prepare("SELECT c.*,p.position,p.duration,p.completed,p.video_asset_id,p.updated_at AS progress_updated FROM learner_progress p JOIN content c ON c.id=p.content_id WHERE p.learner_id=? AND c.status='published' ORDER BY p.updated_at DESC").bind(row.id).all();
+    const current = progress.results.filter(item => item.video_asset_id === JSON.parse(item.data).videoAssetId);
+    const items = await catalog(env,current);
+    return json({saved:await catalog(env,saved.results),progress:items.map((item,i)=>({item,position:current[i].position,duration:current[i].duration,completed:!!current[i].completed,updatedAt:current[i].progress_updated})),completed:current.filter(item=>item.completed).length});
+  }
+  const itemMatch = /^\/api\/learner\/(item|bookmarks|progress)\/([a-f0-9-]{36})$/.exec(path);
+  if(itemMatch) {
+    const entry = await publishedContent(env,itemMatch[2]); const data=JSON.parse(entry.data);
+    need(entry.kind!=='event',400,'Use event registration for school events.');
+    if(itemMatch[1]==='item' && method==='GET') {
+      const bookmark = await env.DB.prepare('SELECT 1 FROM learner_bookmarks WHERE learner_id=? AND content_id=?').bind(row.id,entry.id).first();
+      const progress = await env.DB.prepare('SELECT * FROM learner_progress WHERE learner_id=? AND content_id=?').bind(row.id,entry.id).first();
+      return json({saved:!!bookmark,progress:progressItem(progress,entry)});
+    }
+    if(itemMatch[1]==='bookmarks' && method==='POST') {
+      const input = await bodyJSON(request,1024); need(typeof input?.saved==='boolean',400,'Choose whether to save this material.');
+      if(input.saved) await env.DB.prepare('INSERT INTO learner_bookmarks(learner_id,content_id,created_at) VALUES(?,?,?) ON CONFLICT(learner_id,content_id) DO NOTHING').bind(row.id,entry.id,new Date().toISOString()).run();
+      else await env.DB.prepare('DELETE FROM learner_bookmarks WHERE learner_id=? AND content_id=?').bind(row.id,entry.id).run();
+      return json({saved:input.saved});
+    }
+    if(itemMatch[1]==='progress' && method==='POST') {
+      const input = await bodyJSON(request,1024);
+      need(data.videoAssetId && input?.videoAssetId===data.videoAssetId,409,'This video has changed. Reopen the lesson to save your place.');
+      need(Number.isFinite(input.position) && Number.isFinite(input.duration) && input.duration>0 && input.duration<=86400 && input.position>=0 && input.position<=input.duration+1,400,'This video position is not valid.');
+      const position=Math.min(input.position,input.duration), completed=position/input.duration>=0.9?1:0, now=new Date().toISOString();
+      await env.DB.prepare('INSERT INTO learner_progress(learner_id,content_id,video_asset_id,position,duration,completed,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(learner_id,content_id) DO UPDATE SET position=excluded.position,duration=excluded.duration,completed=CASE WHEN learner_progress.video_asset_id=excluded.video_asset_id THEN MAX(learner_progress.completed,excluded.completed) ELSE excluded.completed END,video_asset_id=excluded.video_asset_id,updated_at=excluded.updated_at').bind(row.id,entry.id,data.videoAssetId,position,input.duration,completed,now).run();
+      return json({saved:true,updatedAt:now});
+    }
+  }
+  if(path==='/api/learner/results' && method==='GET') {
+    const results=await env.DB.prepare("SELECT id,content_id,correct,total,created_at,json_extract(snapshot,'$.title') AS title,json_extract(snapshot,'$.subject') AS subject,json_extract(snapshot,'$.topic') AS topic,json_extract(snapshot,'$.classLevel') AS class_level FROM learner_quiz_results WHERE learner_id=? ORDER BY created_at DESC LIMIT 100").bind(row.id).all();
+    const summary=await env.DB.prepare('SELECT COUNT(*) AS attempts,MAX(100.0*correct/total) AS best FROM learner_quiz_results WHERE learner_id=?').bind(row.id).first();
+    const latest=new Map();
+    for(const result of results.results)if(!latest.has(result.content_id))latest.set(result.content_id,result);
+    const revisionTopics=[...latest.values()].filter(result=>result.correct/result.total<0.7).map(result=>{return {contentId:result.content_id,title:result.title,subject:result.subject,topic:result.topic,percent:Math.round(100*result.correct/result.total)};});
+    return json({attempts:results.results.map(result=>({id:result.id,contentId:result.content_id,correct:result.correct,total:result.total,createdAt:result.created_at,title:result.title,subject:result.subject,topic:result.topic,classLevel:result.class_level})),summary:{attempts:summary.attempts,best:summary.best===null?null:Math.round(summary.best)},revisionTopics});
+  }
+  const resultMatch=/^\/api\/learner\/results\/([a-f0-9-]{36})$/.exec(path);
+  if(resultMatch && method==='GET') {
+    const result=await env.DB.prepare('SELECT * FROM learner_quiz_results WHERE id=? AND learner_id=?').bind(resultMatch[1],row.id).first();
+    need(result,404,'Saved quiz result not found.');
+    return json({attempt:{id:result.id,contentId:result.content_id,correct:result.correct,total:result.total,createdAt:result.created_at,...JSON.parse(result.snapshot)}});
+  }
+  if(path==='/api/learner/registrations' && method==='GET') {
+    const rows=await env.DB.prepare('SELECT r.*,c.status AS content_status,c.data AS current_data FROM event_registrations r LEFT JOIN content c ON c.id=r.event_id WHERE r.learner_id=? ORDER BY r.created_at DESC').bind(row.id).all();
+    return json({items:rows.results.map(reg=>{const details=JSON.parse(reg.data),event=reg.content_status==='published'?JSON.parse(reg.current_data):details.event;return {id:reg.id,eventId:reg.event_id,participants:reg.participants,state:reg.state,attended:!!reg.attended,createdAt:reg.created_at,...details,event:{...details.event,...(reg.content_status==='published'?{title:event.title,date:event.date,time:event.time,venue:event.venue}:{}),available:reg.content_status==='published'}};})});
+  }
+  const registrationMatch=/^\/api\/learner\/registrations\/([a-f0-9-]{36})(\/cancel)?$/.exec(path);
+  if(registrationMatch && method==='POST') {
+    if(registrationMatch[2]) {
+      const result=await env.DB.prepare("UPDATE event_registrations SET state='cancelled',attended=0,updated_at=? WHERE event_id=? AND learner_id=? AND state='registered'").bind(new Date().toISOString(),registrationMatch[1],row.id).run();
+      need(result.meta.changes===1,404,'No active registration was found.');return json({cancelled:true});
+    }
+    await learnerRateLimit(request,env,'event-registration',row.username,900000,40,20);
+    const event=await publishedContent(env,registrationMatch[1],'event'),data=JSON.parse(event.data);
+    const end=data.date?Date.parse(data.date+'T'+(data.time||'23:59')+':00+03:00'):0;
+    need(data.registrationOpen && end>Date.now() && (!data.registrationDeadline || data.registrationDeadline>=ugandaDate()),409,'Registration for this event is closed.');
+    const input=await bodyJSON(request,4096);need(input && typeof input==='object',400,'Enter the registration details.');
+    const schoolName=text(input.schoolName,150),teamName=text(input.teamName,100),contactName=text(input.contactName,80),phone=text(input.phone,30),participants=Number(input.participants);
+    need(schoolName.length>=2 && contactName.length>=2,400,'Enter the school name and teacher or organiser contact name.');
+    need(data.eventType!=='Quiz' || teamName.length>=2,400,'Enter your quiz team name.');
+    need(!phone || /^\+?[0-9 ()-]{7,25}$/.test(phone),400,'Enter a valid school contact phone number, or leave it blank.');
+    need(Number.isInteger(participants)&&participants>=1&&participants<=50,400,'Register between 1 and 50 participants.');
+    const existing=await env.DB.prepare("SELECT id FROM event_registrations WHERE event_id=? AND learner_id=? AND state='registered'").bind(event.id,row.id).first();
+    need(!existing,409,'You already have an active registration for this event.');
+    const capacity=data.registrationCapacity||0,now=new Date().toISOString(),id=crypto.randomUUID();
+    const details={schoolName,teamName,contactName,phone,event:{title:data.title,date:data.date,time:data.time,venue:data.venue}};
+    // Capacity check and reservation execute together; concurrent schools cannot oversubscribe.
+    const result=await env.DB.prepare("INSERT INTO event_registrations(id,learner_id,event_id,participants,data,state,attended,created_at,updated_at) SELECT ?,?,?,?,?,'registered',0,?,? WHERE ?=0 OR (SELECT COALESCE(SUM(participants),0) FROM event_registrations WHERE event_id=? AND state='registered')+?<=? ON CONFLICT(learner_id,event_id) DO UPDATE SET participants=excluded.participants,data=excluded.data,state='registered',attended=0,updated_at=excluded.updated_at WHERE event_registrations.state='cancelled'").bind(id,row.id,event.id,participants,JSON.stringify(details),now,now,capacity,event.id,participants,capacity).run();
+    need(result.meta.changes===1,409,'Those places are no longer available. Refresh the event and try a smaller group.');
+    return json({registered:true},201);
+  }
+  throw new HttpError(404,'Account page not found.');
+}
+async function publicAnnouncements(env) {
+  const rows=await env.DB.prepare("SELECT * FROM announcements WHERE status='published' AND (expires_on='' OR expires_on>=?) ORDER BY pinned DESC,created_at DESC LIMIT 50").bind(ugandaDate()).all();
+  return rows.results.map(announcementItem);
+}
+async function adminLearningAPI(request,env,path,method,url) {
+  if(path==='/api/admin/learners' && method==='GET') {
+    const query=text(url.searchParams.get('q'),100),classLevel=text(url.searchParams.get('class'),2),page=Math.max(1,Math.min(100000,Number(url.searchParams.get('page'))||1));
+    need(!classLevel || /^(P[1-7]|S[1-6])$/.test(classLevel),400,'Choose a valid class.');
+    const where='WHERE (?=\'\' OR instr(lower(l.username||\' \'||l.display_name),lower(?))>0) AND (?=\'\' OR l.class_level=?)';
+    const parameters=[query,query,classLevel,classLevel];
+    const count=await env.DB.prepare('SELECT COUNT(*) AS n FROM learners l '+where).bind(...parameters).first();
+    const rows=await env.DB.prepare('SELECT l.id,l.username,l.display_name,l.class_level,l.created_at,a.last_login FROM learners l LEFT JOIN learner_activity a ON a.learner_id=l.id '+where+' ORDER BY l.created_at DESC,l.id LIMIT 50 OFFSET ?').bind(...parameters,(Math.floor(page)-1)*50).all();
+    const totals=await env.DB.prepare('SELECT COUNT(*) AS total,SUM(CASE WHEN class_level LIKE \'P%\' THEN 1 ELSE 0 END) AS primary_count,SUM(CASE WHEN class_level LIKE \'S%\' THEN 1 ELSE 0 END) AS secondary_count FROM learners').first();
+    return json({items:rows.results.map(item=>({...publicLearner(item),lastLogin:item.last_login})),total:count.n,page:Math.floor(page),pageSize:50,totals:{total:totals.total,primary:totals.primary_count||0,secondary:totals.secondary_count||0}});
+  }
+  if(path==='/api/admin/announcements' && method==='GET') {
+    const rows=await env.DB.prepare('SELECT * FROM announcements ORDER BY updated_at DESC LIMIT 200').all();return json({items:rows.results.map(announcementItem)});
+  }
+  if(path==='/api/admin/announcements' && method==='POST') {
+    const input=await bodyJSON(request,16384);need(input&&typeof input==='object',400,'Enter your announcement.');
+    const id=input.id||crypto.randomUUID(),title=text(input.title,180),body=text(input.body,5000),level=input.level||'all',classLevel=text(input.classLevel,2),expiresOn=text(input.expiresOn,10),status=input.status==='published'?'published':'draft';
+    need(/^[a-f0-9-]{36}$/.test(id),400,'Invalid announcement reference.');need(title.length>=3&&body.length>=3,400,'Enter an announcement title and message.');
+    need(['all','primary','secondary'].includes(level),400,'Choose an announcement audience.');
+    need(!classLevel || (level==='primary'?/^P[1-7]$/:level==='secondary'?/^S[1-6]$/:/$^/).test(classLevel),400,'Choose a class in the selected audience.');
+    need(!expiresOn||validDate(expiresOn),400,'Choose a valid expiry date.');
+    const now=new Date().toISOString();
+    await env.DB.prepare('INSERT INTO announcements(id,status,title,body,level,class_level,pinned,expires_on,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,title=excluded.title,body=excluded.body,level=excluded.level,class_level=excluded.class_level,pinned=excluded.pinned,expires_on=excluded.expires_on,updated_at=excluded.updated_at').bind(id,status,title,body,level,classLevel,input.pinned===true?1:0,expiresOn,now,now).run();
+    return json({saved:true});
+  }
+  if(path==='/api/admin/registrations' && method==='GET') {
+    const eventId=text(url.searchParams.get('eventId'),36);need(/^[a-f0-9-]{36}$/.test(eventId),400,'Choose a school event.');
+    const rows=await env.DB.prepare('SELECT r.*,l.username FROM event_registrations r JOIN learners l ON l.id=r.learner_id WHERE r.event_id=? ORDER BY r.created_at DESC').bind(eventId).all();
+    return json({items:rows.results.map(row=>({id:row.id,eventId:row.event_id,participants:row.participants,state:row.state,attended:!!row.attended,username:row.username,createdAt:row.created_at,...JSON.parse(row.data)}))});
+  }
+  const attendance=/^\/api\/admin\/registrations\/([a-f0-9-]{36})$/.exec(path);
+  if(attendance && method==='POST') {
+    const input=await bodyJSON(request,1024);need(typeof input?.attended==='boolean',400,'Choose the attendance status.');
+    const changed=await env.DB.prepare("UPDATE event_registrations SET attended=?,updated_at=? WHERE id=? AND state='registered'").bind(input.attended?1:0,new Date().toISOString(),attendance[1]).run();
+    need(changed.meta.changes===1,404,'Active registration not found.');return json({saved:true});
+  }
+  return null;
+}
+
 function filePolicy(mime) {
   if (['video/mp4', 'video/webm', 'video/quicktime'].includes(mime)) return 1024 * 1024 * 1024;
   if (mime === 'application/pdf') return 25 * 1024 * 1024;
@@ -332,23 +501,42 @@ async function api(request, env) {
     if (current) await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(current.token_hash).run();
     return json({ authenticated: false }, 200, { 'Set-Cookie': 'vl_admin=; Path=/api; HttpOnly; Secure; SameSite=Strict; Max-Age=0' });
   }
+  if (path === '/api/announcements' && method === 'GET') return json({items:await publicAnnouncements(env)});
   if (path === '/api/content' && method === 'GET') {
     const rows = await env.DB.prepare("SELECT * FROM content WHERE status='published' ORDER BY created_at DESC LIMIT 500").all();
-    return json({ items: rows.results.map(row => sanitize(row)), access: 'free' });
+    return json({ items: await catalog(env,rows.results), access: 'free' });
   }
   const mediaMatch = /^\/api\/media\/([a-f0-9-]{36})$/.exec(path);
   if (mediaMatch && ['GET', 'HEAD'].includes(method)) return media(request, env, mediaMatch[1]);
   const gradeMatch = /^\/api\/quiz\/([a-f0-9-]{36})\/grade$/.exec(path);
   if (gradeMatch && method === 'POST') {
     const row = await env.DB.prepare("SELECT * FROM content WHERE id=? AND kind='quiz' AND status='published'").bind(gradeMatch[1]).first();
-    need(row, 404, 'Quiz not found.'); const data = JSON.parse(row.data); const { answers } = await bodyJSON(request, 4096);
+    need(row, 404, 'Quiz not found.'); const data = JSON.parse(row.data); const input = await bodyJSON(request, 8192); const answers=input?.answers;
     need(Array.isArray(answers) && answers.length === data.questions.length && answers.every(x => Number.isInteger(x) && x >= -1 && x <= 3), 400, 'Choose an answer for each question, then submit.');
-    const review = data.questions.map((q, i) => ({ correct: answers[i] === q.answer, answer: q.answer, explanation: q.explanation }));
-    return json({ correct: review.filter(q => q.correct).length, total: review.length, review });
+    const learner=await learnerSession(request,env);
+    const submissionId=input.submissionId||crypto.randomUUID();
+    need(/^[a-f0-9-]{36}$/.test(submissionId),400,'Invalid quiz submission.');
+    if(learner){
+      const prior=await env.DB.prepare('SELECT * FROM learner_quiz_results WHERE learner_id=? AND submission_id=?').bind(learner.id,submissionId).first();
+      if(prior){need(prior.content_id===row.id,409,'Start a fresh quiz submission.');return json({correct:prior.correct,total:prior.total,review:JSON.parse(prior.snapshot).review,saved:true});}
+      await learnerRateLimit(request,env,'quiz-result',learner.username,900000,120,60);
+    }
+    need(!input.quizUpdatedAt || input.quizUpdatedAt===row.updated_at,409,'This quiz was updated. Close it and refresh the library before trying again.');
+    const review = data.questions.map((q, i) => ({ question:q.question,options:q.options,selectedAnswer:answers[i],correct: answers[i] === q.answer, answer: q.answer, explanation: q.explanation }));
+    const correct=review.filter(q => q.correct).length;
+    if(learner){
+      const snapshot={title:data.title,subject:data.subject,topic:data.topic,classLevel:data.classLevel,review};
+      await env.DB.prepare('INSERT INTO learner_quiz_results(id,learner_id,content_id,submission_id,correct,total,snapshot,created_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(learner_id,submission_id) DO NOTHING').bind(crypto.randomUUID(),learner.id,row.id,submissionId,correct,review.length,JSON.stringify(snapshot),new Date().toISOString()).run();
+      const stored=await env.DB.prepare('SELECT * FROM learner_quiz_results WHERE learner_id=? AND submission_id=?').bind(learner.id,submissionId).first();
+      need(stored.content_id===row.id,409,'Start a fresh quiz submission.');
+      return json({correct:stored.correct,total:stored.total,review:JSON.parse(stored.snapshot).review,saved:true});
+    }
+    return json({ correct, total: review.length, review, saved:false });
   }
   await requireAdmin(request, env);
+  const extra=await adminLearningAPI(request,env,path,method,url);if(extra)return extra;
   if (path === '/api/admin/content' && method === 'GET') {
-    const rows = await env.DB.prepare('SELECT * FROM content ORDER BY updated_at DESC LIMIT 500').all(); return json({ items: rows.results.map(row => sanitize(row, true)) });
+    const rows = await env.DB.prepare('SELECT * FROM content ORDER BY updated_at DESC LIMIT 500').all(); return json({ items: await catalog(env,rows.results,true) });
   }
   if (path === '/api/admin/content' && method === 'POST') {
     const input = await bodyJSON(request); const valid = validateContent(input);
@@ -356,6 +544,12 @@ async function api(request, env) {
     for (const [assetId, prefix] of valid.references) {
       const asset = await env.DB.prepare("SELECT mime FROM assets WHERE id=? AND state='ready'").bind(assetId).first();
       need(asset && asset.mime.startsWith(prefix), 400, 'One of the attached files is missing or has the wrong file type.');
+    }
+    if(valid.data.lowDataVideoAssetId){
+      const low=await env.DB.prepare('SELECT size FROM assets WHERE id=?').bind(valid.data.lowDataVideoAssetId).first();
+      const main=valid.data.videoAssetId?await env.DB.prepare('SELECT size FROM assets WHERE id=?').bind(valid.data.videoAssetId).first():null;
+      need(valid.status!=='published' || main,400,'Upload the standard video before publishing a smaller version.');
+      need(!main || low.size<main.size,400,'The data-saving video must be smaller than the standard video.');
     }
     const now = new Date().toISOString();
     await env.DB.batch([
