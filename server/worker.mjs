@@ -9,6 +9,12 @@ const schema = [
   `CREATE INDEX IF NOT EXISTS asset_references ON content_assets(asset_id)`,
   `CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, credential_hash TEXT NOT NULL, expires INTEGER NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS login_attempts (id TEXT PRIMARY KEY, attempts INTEGER NOT NULL, expires INTEGER NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS learners (id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL, class_level TEXT NOT NULL, password_hash TEXT NOT NULL, recovery_hash TEXT NOT NULL, credential_version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS learner_sessions (token_hash TEXT PRIMARY KEY, learner_id TEXT NOT NULL, credential_version INTEGER NOT NULL, expires INTEGER NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS learner_session_owner ON learner_sessions(learner_id)`,
+  `CREATE INDEX IF NOT EXISTS learner_session_expiry ON learner_sessions(expires)`,
+  `CREATE TABLE IF NOT EXISTS learner_attempts (id TEXT PRIMARY KEY, attempts INTEGER NOT NULL, expires INTEGER NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS learner_attempt_expiry ON learner_attempts(expires)`,
 ];
 class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
 function need(condition, status, message) { if (!condition) throw new HttpError(status, message); }
@@ -56,7 +62,7 @@ async function bodyJSON(request, limit = 512 * 1024) {
   catch (error) { if (error instanceof HttpError) throw error; throw new HttpError(400, 'The submitted information is not valid.'); }
 }
 function csrf(request) {
-  need(request.headers.get('Origin') === new URL(request.url).origin && request.headers.get('Sec-Fetch-Site') !== 'cross-site', 403, 'Open the dashboard on this website before making changes.');
+  need(request.headers.get('Origin') === new URL(request.url).origin && request.headers.get('Sec-Fetch-Site') !== 'cross-site', 403, 'Open this website before submitting changes.');
 }
 async function session(request, env) {
   if (!configured(env)) return null;
@@ -66,6 +72,156 @@ async function session(request, env) {
   return row && same(row.credential_hash, await digest(env.ADMIN_PASSWORD)) ? row : null;
 }
 async function requireAdmin(request, env) { need(await session(request, env), 401, 'Please sign in to the administrator dashboard.'); }
+
+// Learner accounts never share administrator credentials, cookies or permissions.
+const LEARNER_TTL = 7 * 86400000;
+const PASSWORD_ITERATIONS = 100000; // Cloudflare's production Web Crypto per-call ceiling.
+const randomHex = size => Array.from(crypto.getRandomValues(new Uint8Array(size)), b => b.toString(16).padStart(2, '0')).join('');
+const clearLearnerCookie = 'vl_learner=; Path=/api; HttpOnly; Secure; SameSite=Strict; Max-Age=0';
+function learnerCookie(token) { return `vl_learner=${token}; Path=/api; HttpOnly; Secure; SameSite=Strict; Max-Age=${LEARNER_TTL / 1000}`; }
+function learnerToken(request) { return request.headers.get('Cookie')?.match(/(?:^|;\s*)vl_learner=([a-f0-9]{64})(?:;|$)/)?.[1]; }
+function username(value) {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+function validateUsername(value) {
+  const name = username(value);
+  need(/^[a-z0-9][a-z0-9._-]{2,29}$/.test(name), 400, 'Use 3–30 letters, numbers, dots, underscores or hyphens for your username.');
+  need(!['admin', 'administrator', 'support', 'root', 'v-learning', 'v-learning-uganda'].includes(name), 400, 'Please choose a different learner username.');
+  return name;
+}
+function validatePassword(value) {
+  need(typeof value === 'string' && value.length >= 12 && value.length <= 128, 400, 'Choose a password with 12–128 characters. A few unrelated words work well.');
+  const common = ['password1234', 'password12345', 'password123456', '123456789012', '1234567890123', '12345678901234', 'qwertyuiop12', 'qwertyuiop123', 'vlearninguganda', 'v-learninguganda'];
+  need(!common.includes(value.toLowerCase()) && !/^(.)\1+$/.test(value), 400, 'Choose a less predictable password, such as a few unrelated words.');
+  return value;
+}
+function learnerProfile(input) {
+  need(typeof input.displayName === 'string' && input.displayName.trim().length >= 2 && input.displayName.trim().length <= 80 && !/[\x00-\x1f\x7f]/.test(input.displayName), 400, 'Enter a first name or nickname with 2–80 characters.');
+  const classLevel = input.classLevel ?? '';
+  need(typeof classLevel === 'string' && (classLevel === '' || /^(P[1-7]|S[1-6])$/.test(classLevel)), 400, 'Choose a Primary or Secondary class, or leave the class open.');
+  return { displayName: input.displayName.trim(), classLevel };
+}
+function publicLearner(row) {
+  return { id: row.id, username: row.username, displayName: row.display_name, classLevel: row.class_level, createdAt: row.created_at };
+}
+async function passwordKey(password, salt, iterations) {
+  const key = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bytes = new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: Uint8Array.from(salt.match(/../g), byte => parseInt(byte, 16)), iterations }, key, 256));
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+async function hashPassword(password) {
+  const salt = randomHex(16);
+  return `pbkdf2-sha256$${PASSWORD_ITERATIONS}$${salt}$${await passwordKey(password, salt, PASSWORD_ITERATIONS)}`;
+}
+async function checkPassword(password, stored) {
+  const match = /^pbkdf2-sha256\$(\d+)\$([a-f0-9]{32})\$([a-f0-9]{64})$/.exec(stored || '');
+  // A missing username still incurs the same KDF work as a real account.
+  const salt = match?.[2] || '00000000000000000000000000000000';
+  const iterations = match ? Number(match[1]) : PASSWORD_ITERATIONS;
+  need(iterations >= 100000 && iterations <= PASSWORD_ITERATIONS, 503, 'Account sign-in is temporarily unavailable.');
+  const candidate = await passwordKey(password, salt, iterations);
+  return !!match && same(candidate, match[3]);
+}
+function newRecoveryCode() { return randomHex(16).toUpperCase().match(/.{4}/g).join('-'); }
+async function recoveryDigest(code) { return digest('vl-learner-recovery:' + code.replace(/[-\s]/g, '').toUpperCase()); }
+async function learnerSession(request, env) {
+  const token = learnerToken(request);
+  if (!token) return null;
+  return env.DB.prepare('SELECT l.*, s.token_hash FROM learner_sessions s JOIN learners l ON l.id = s.learner_id AND l.credential_version = s.credential_version WHERE s.token_hash = ? AND s.expires > ?').bind(await digest(token), Date.now()).first();
+}
+async function issueLearnerSession(request, env, row) {
+  const token = randomHex(32); const now = Date.now(); const previous = learnerToken(request);
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM learner_sessions WHERE expires <= ?').bind(now),
+    ...(previous ? [env.DB.prepare('DELETE FROM learner_sessions WHERE token_hash = ?').bind(await digest(previous))] : []),
+    // Capture the verified credential version; a concurrent password reset invalidates this session too.
+    env.DB.prepare('INSERT INTO learner_sessions(token_hash, learner_id, credential_version, expires) VALUES (?, ?, ?, ?)').bind(await digest(token), row.id, row.credential_version, now + LEARNER_TTL),
+  ]);
+  return learnerCookie(token);
+}
+async function learnerRateLimit(request, env, action, name = '', period = 900000, ipLimit = 30, accountLimit = 10) {
+  const now = Date.now(); const end = (Math.floor(now / period) + 1) * period;
+  const subjects = [[`ip:${request.headers.get('CF-Connecting-IP') || 'unknown'}`, ipLimit], ...(name ? [[`username:${name}`, accountLimit]] : [])];
+  const keys = await Promise.all(subjects.map(async ([subject, limit]) => [await digest(`${action}:${subject}:${end}`), limit]));
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM learner_attempts WHERE expires <= ?').bind(now),
+    ...keys.map(([key]) => env.DB.prepare('INSERT INTO learner_attempts(id, attempts, expires) VALUES (?, 1, ?) ON CONFLICT(id) DO UPDATE SET attempts = attempts + 1').bind(key, end)),
+  ]);
+  for (const [key, limit] of keys) {
+    const attempt = await env.DB.prepare('SELECT attempts FROM learner_attempts WHERE id = ?').bind(key).first();
+    need(attempt.attempts <= limit, 429, action === 'signup' ? 'Too many account requests. Please try again in an hour.' : 'Too many attempts. Please wait 15 minutes and try again.');
+  }
+}
+async function learnerAPI(request, env, path, method) {
+  if (path === '/api/learner/session' && method === 'GET') {
+    const row = await learnerSession(request, env);
+    return json({ learner: row ? publicLearner(row) : null });
+  }
+  if (path === '/api/learner/logout' && method === 'POST') {
+    const token = learnerToken(request);
+    if (token) await env.DB.prepare('DELETE FROM learner_sessions WHERE token_hash = ?').bind(await digest(token)).run();
+    return json({ learner: null }, 200, { 'Set-Cookie': clearLearnerCookie });
+  }
+  if (path === '/api/learner/signup' && method === 'POST') {
+    await learnerRateLimit(request, env, 'signup', '', 3600000, 50);
+    const input = await bodyJSON(request, 4096);
+    need(input && typeof input === 'object' && !Array.isArray(input), 400, 'Enter your account details.');
+    const name = validateUsername(input.username); const profile = learnerProfile(input); const password = validatePassword(input.password);
+    const exists = await env.DB.prepare('SELECT id FROM learners WHERE username = ?').bind(name).first();
+    need(!exists, 409, 'That username is already taken. Try a different username or log in.');
+    const id = crypto.randomUUID(); const now = new Date().toISOString(); const recoveryCode = newRecoveryCode();
+    const passwordHash = await hashPassword(password); const recoveryHash = await recoveryDigest(recoveryCode);
+    const inserted = await env.DB.prepare('INSERT INTO learners(id, username, display_name, class_level, password_hash, recovery_hash, credential_version, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?) ON CONFLICT(username) DO NOTHING').bind(id, name, profile.displayName, profile.classLevel, passwordHash, recoveryHash, now, now).run();
+    need(inserted.meta.changes === 1, 409, 'That username is already taken. Try a different username or log in.');
+    const row = await env.DB.prepare('SELECT * FROM learners WHERE id = ?').bind(id).first();
+    return json({ learner: publicLearner(row), recoveryCode }, 201, { 'Set-Cookie': await issueLearnerSession(request, env, row) });
+  }
+  if (path === '/api/learner/login' && method === 'POST') {
+    const input = await bodyJSON(request, 4096);
+    need(input && typeof input === 'object' && !Array.isArray(input), 400, 'Enter your username and password.');
+    const name = username(input.username).slice(0, 128);
+    await learnerRateLimit(request, env, 'login', name || '(empty)');
+    need(typeof input.password === 'string' && input.password.length > 0 && input.password.length <= 128, 401, 'The username or password is incorrect.');
+    const row = await env.DB.prepare('SELECT * FROM learners WHERE username = ?').bind(name).first();
+    need(await checkPassword(input.password, row?.password_hash), 401, 'The username or password is incorrect.');
+    return json({ learner: publicLearner(row) }, 200, { 'Set-Cookie': await issueLearnerSession(request, env, row) });
+  }
+  if (path === '/api/learner/recover' && method === 'POST') {
+    const input = await bodyJSON(request, 4096);
+    need(input && typeof input === 'object' && !Array.isArray(input), 400, 'Enter your recovery details.');
+    const name = username(input.username).slice(0, 128);
+    await learnerRateLimit(request, env, 'recover', name || '(empty)', 900000, 15, 5);
+    const rawCode = typeof input.recoveryCode === 'string' ? input.recoveryCode : '';
+    const code = rawCode.replace(/[-\s]/g, '').toUpperCase();
+    const row = await env.DB.prepare('SELECT * FROM learners WHERE username = ?').bind(name).first();
+    const providedHash = await recoveryDigest(code);
+    need(/^[A-F0-9]{32}$/.test(code) && row && same(providedHash, row.recovery_hash), 401, 'The username or recovery code is incorrect.');
+    const passwordHash = await hashPassword(validatePassword(input.newPassword)); const recoveryCode = newRecoveryCode();
+    const changed = await env.DB.prepare('UPDATE learners SET password_hash = ?, recovery_hash = ?, credential_version = credential_version + 1, updated_at = ? WHERE id = ? AND credential_version = ? AND recovery_hash = ?').bind(passwordHash, await recoveryDigest(recoveryCode), new Date().toISOString(), row.id, row.credential_version, providedHash).run();
+    need(changed.meta.changes === 1, 401, 'This recovery code has already been used.');
+    await env.DB.prepare('DELETE FROM learner_sessions WHERE learner_id = ?').bind(row.id).run();
+    return json({ learner: null, recoveryCode }, 200, { 'Set-Cookie': clearLearnerCookie });
+  }
+  if (['/api/learner/profile', '/api/learner/password'].includes(path) && method === 'POST') {
+    const row = await learnerSession(request, env);
+    need(row, 401, 'Please log in to your learner account.');
+    const input = await bodyJSON(request, 4096);
+    need(input && typeof input === 'object' && !Array.isArray(input), 400, 'Enter your account details.');
+    if (path.endsWith('/profile')) {
+      const profile = learnerProfile(input);
+      await env.DB.prepare('UPDATE learners SET display_name = ?, class_level = ?, updated_at = ? WHERE id = ?').bind(profile.displayName, profile.classLevel, new Date().toISOString(), row.id).run();
+      return json({ learner: publicLearner({ ...row, display_name: profile.displayName, class_level: profile.classLevel }) });
+    }
+    await learnerRateLimit(request, env, 'password', row.username);
+    need(typeof input.currentPassword === 'string' && input.currentPassword.length <= 128 && await checkPassword(input.currentPassword, row.password_hash), 401, 'Your current password is incorrect.');
+    const passwordHash = await hashPassword(validatePassword(input.newPassword));
+    const changed = await env.DB.prepare('UPDATE learners SET password_hash = ?, credential_version = credential_version + 1, updated_at = ? WHERE id = ? AND credential_version = ?').bind(passwordHash, new Date().toISOString(), row.id, row.credential_version).run();
+    need(changed.meta.changes === 1, 401, 'Your account has changed. Please log in again.');
+    await env.DB.prepare('DELETE FROM learner_sessions WHERE learner_id = ?').bind(row.id).run();
+    return json({ learner: null }, 200, { 'Set-Cookie': clearLearnerCookie });
+  }
+  throw new HttpError(404, 'Account page not found.');
+}
 const text = (value, max = 200) => String(value ?? '').trim().slice(0, max);
 function sanitize(entry, isAdmin = false) {
   const data = JSON.parse(entry.data);
@@ -152,6 +308,7 @@ async function api(request, env) {
   need(env.DB, 503, 'The content library is being connected. Please try again shortly.');
   await initialize(env.DB);
   if (!['GET', 'HEAD'].includes(method)) csrf(request);
+  if (path.startsWith('/api/learner/')) return learnerAPI(request, env, path, method);
   if (path === '/api/session' && method === 'GET') return json({ authenticated: !!await session(request, env), configured: configured(env), setupIssue: adminSetupIssue(env) });
   if (path === '/api/login' && method === 'POST') {
     need(configured(env), 503, 'The owner needs to activate administrator sign-in first.');
