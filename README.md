@@ -8,6 +8,17 @@ Contact: **Tr Ojok Mtn · +256 778 441681**.
 
 The public interface follows the supplied Stitch “Equatorial Clarity” homepage layout, with the official V-Learning Uganda logo and its magenta (`#BE1373`) and yellow (`#F8D346`) as the main colours. Deep navy (`#24324B`) supports headings and body text, while small teal (`#167D7F`) icons, badges and highlights complement the main magenta and yellow palette. White cards, light pink backgrounds and Plus Jakarta Sans keep the learning pages readable. The uploaded logo is served unchanged from `public/brand/v-learning-uganda-logo.jpg`. The same tokens style the learning libraries, event pages and administrator publishing tools. The application uses its existing live API rather than placeholder content.
 
+## School photographs and YouTube
+
+The homepage uses two credited illustrative school photos taken in Uganda, served locally at lightweight sizes. These are stock photographs, not a claim that the pictured learners attend a particular partner school:
+
+- `public/images/schoolchild-uganda.jpg`: [bill wegener / Unsplash](https://unsplash.com/photos/boy-in-red-crew-neck-t-shirt-smiling-NmVKiFkVdnM).
+- `public/images/classroom-uganda.jpg`: [Zach Wear / Unsplash](https://unsplash.com/photos/a-group-of-people-sitting-at-desks-in-a-classroom-wjCYyd_KppE), Iganga, Uganda.
+
+Both source pages identify the images as free to use under the [Unsplash License](https://unsplash.com/license). The source images are unchanged apart from the image host's delivered size/compression; CSS fits them into the layout. Photographer credits and source links appear in the footer.
+
+The homepage and footer link to the owner's public channel, `https://www.youtube.com/@v-learninguganda3246`. No channel videos are downloaded, embedded or imported into the learning library.
+
 ## Deployment
 
 Use Node.js 22 or later, run `npm ci`, then `npm run build`. Cloudflare Pages deploys `dist` from `main`. The build copies the API into `dist/_worker.js`; only `/api/*` invokes it.
