@@ -6,7 +6,7 @@ Contact: **Tr Ojok Mtn · +256 778 441681**.
 
 ## Interface
 
-The public interface follows the supplied Stitch “Equatorial Clarity” homepage reference: royal blue navigation, amber contact actions, white learning cards and Plus Jakarta Sans typography. The same tokens style the learning libraries, event pages and administrator publishing tools. The application uses its existing live API rather than placeholder content.
+The public interface follows the supplied Stitch “Equatorial Clarity” homepage layout, with the official V-Learning Uganda logo and its magenta (`#BE1373`) and yellow (`#F8D346`) as the main colours. White cards, light pink backgrounds, dark text and Plus Jakarta Sans keep the learning pages readable. The uploaded logo is served unchanged from `public/brand/v-learning-uganda-logo.jpg`. The same tokens style the learning libraries, event pages and administrator publishing tools. The application uses its existing live API rather than placeholder content.
 
 ## Deployment
 

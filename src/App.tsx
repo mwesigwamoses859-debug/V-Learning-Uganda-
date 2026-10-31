@@ -6,7 +6,7 @@ import Admin from './ui/Admin';
 
 const icons={lesson:Video,pdf:FileText,event:CalendarDays,quiz:Gamepad2};
 function readView(){return window.location.pathname.startsWith('/admin')?'admin':new URLSearchParams(window.location.search).get('view') || 'home';}
-function Brand({compact=false}:{compact?:boolean}){return <span className={'brand'+(compact?' compact':'')}><span className="brand-icon"><GraduationCap size={compact?20:25}/></span><span><strong>V-LEARNING UGANDA</strong>{!compact&&<small>Learn anywhere. Achieve more.</small>}</span></span>;}
+function Brand({compact=false}:{compact?:boolean}){return <span className={'brand'+(compact?' compact':'')}><img className="brand-logo" src="/brand/v-learning-uganda-logo.jpg" width={720} height={430} alt="V-Learning Uganda — Making Learning Better"/></span>;}
 function formatDate(date:string){if(!date)return 'Date to be announced';return new Intl.DateTimeFormat('en-UG',{day:'numeric',month:'long',year:'numeric',timeZone:'Africa/Kampala'}).format(new Date(date+'T12:00:00+03:00'));}
 function Empty({title='New learning materials are on the way.',children,showBadge=false}:{title?:string;children?:React.ReactNode;showBadge?:boolean}) {return <div className="empty-state panel"><div className="empty-icon"><BookOpen size={28}/></div><h3>{title}</h3><p>{children || 'Published videos and PDFs from '+CONTACT.name+' will appear here. Check back soon or contact us for an update.'}</p>{showBadge&&<span className="empty-badge"><span/>Free learning materials for every learner</span>}</div>;}
 function Card({item,onOpen}:{item:Entry;onOpen:(item:Entry)=>void}) {
