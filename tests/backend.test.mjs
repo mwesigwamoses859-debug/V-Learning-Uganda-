@@ -9,7 +9,7 @@ const password='isolated-test-password-never-deployed';
 function runtime(bindings={ADMIN_PASSWORD:password}){return new Miniflare({modules:true,script,compatibilityDate:'2026-07-30',d1Databases:['DB'],r2Buckets:['MEDIA'],bindings});}
 
 test('durable content, file access, sessions and quizzes',async t=>{
-  const mf=runtime();let cookie='';let pdfId='',draftId='';
+  const mf=runtime();let cookie='';let pdfId='',draftId='',learnerCookie='';
   const req=(path,body,options={})=>mf.dispatchFetch(origin+path,{method:options.method || (body===undefined?'GET':'POST'),headers:{Origin:origin,...(cookie?{Cookie:cookie}:{}),...(body===undefined||body instanceof Uint8Array?{}:{'Content-Type':'application/json'}),...options.headers},body:body===undefined?undefined:body instanceof Uint8Array?body:JSON.stringify(body)});
   const content={kind:'pdf',status:'draft',title:'Real educator material',description:'Private upload',level:'primary',classLevel:'P7',subject:'Science',topic:'Plant life',teacherName:'Tr Ojok Mtn'};
   try {
@@ -35,10 +35,13 @@ test('durable content, file access, sessions and quizzes',async t=>{
       const saved=await req('/api/admin/content',{...content,pdfAssetId:pdfId});assert.equal(saved.status,200);draftId=(await saved.json()).item.id;
       const adminCookie=cookie;cookie='';assert.equal((await req('/api/media/'+pdfId)).status,404);assert.equal((await (await req('/api/content')).json()).items.length,0);cookie=adminCookie;
     });
-    await t.test('publishes durable content for free and supports downloads and seeking',async()=>{
+    await t.test('published PDFs require a learner account and support downloads and seeking',async()=>{
       assert.equal((await req('/api/admin/content',{...content,id:draftId,pdfAssetId:pdfId,status:'published',priceUGX:5000,access:'paid'})).status,200);
       const adminCookie=cookie;cookie='';
       const catalog=await (await req('/api/content')).json();assert.equal(catalog.items.length,1);assert.equal(catalog.items[0].access,'free');assert.equal(catalog.items[0].priceUGX,0);
+      assert.equal(catalog.items[0].requiresLogin,true);assert.equal(catalog.items[0].pdfAssetId,'');
+      assert.equal((await req('/api/media/'+pdfId)).status,401);
+      const signup=await req('/api/learner/signup',{username:'member.fixture',displayName:'Fixture',classLevel:'P7',password:'isolated learner phrase for tests'});assert.equal(signup.status,201);learnerCookie=signup.headers.get('set-cookie').split(';')[0];cookie=learnerCookie;
       const file=await req('/api/media/'+pdfId);assert.equal(file.status,200);assert.equal(file.headers.get('Content-Type'),'application/pdf');assert.ok((await file.text()).startsWith('%PDF-'));
       const range=await req('/api/media/'+pdfId,undefined,{headers:{Range:'bytes=0-4'}});assert.equal(range.status,206);assert.equal(await range.text(),'%PDF-');
       assert.equal((await req('/api/media/'+pdfId,undefined,{headers:{Range:'bytes=999999-'}})).status,416);
@@ -64,7 +67,7 @@ test('durable content, file access, sessions and quizzes',async t=>{
     });
     await t.test('quiz answer keys stay private until server-side marking',async()=>{
       const saved=await req('/api/admin/content',{...content,kind:'quiz',title:'Teacher-authored practice',status:'published',questions:[{question:'How many?',options:['one','two','three','four'],answer:2,explanation:'Teacher-reviewed explanation.'}]});assert.equal(saved.status,200);const quiz=(await saved.json()).item;
-      const adminCookie=cookie;cookie='';const publicItem=(await (await req('/api/content')).json()).items.find(x=>x.id===quiz.id);assert.deepEqual(Object.keys(publicItem.questions[0]).sort(),['options','question']);
+      const adminCookie=cookie;cookie='';const publicItem=(await (await req('/api/content')).json()).items.find(x=>x.id===quiz.id);assert.deepEqual(publicItem.questions,[]);assert.equal((await req('/api/quiz/'+quiz.id+'/grade',{answers:[2]})).status,401);cookie=learnerCookie;const memberItem=(await (await req('/api/content')).json()).items.find(x=>x.id===quiz.id);assert.deepEqual(Object.keys(memberItem.questions[0]).sort(),['options','question']);
       const marks=await (await req('/api/quiz/'+quiz.id+'/grade',{answers:[2]})).json();assert.equal(marks.correct,1);assert.equal(marks.total,1);assert.equal(marks.review[0].answer,2);cookie=adminCookie;
     });
     await t.test('unpublishing revokes public file access and logout invalidates the session',async()=>{

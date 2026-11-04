@@ -9,7 +9,7 @@ interface Props {
   view:LearnerView; learner:Learner|null; loading:boolean; sessionError:string;
   recoveryCode:string; feedback:string; onRetry:()=>void;
   onNavigate:(view:string,classLevel?:string)=>void;
-  onAuthenticated:(result:{learner:Learner;recoveryCode?:string})=>void;
+  onAuthenticated:(result:{learner:Learner;recoveryCode?:string})=>void|Promise<void>;
   onUpdated:(learner:Learner)=>void; onSignedOut:(message?:string)=>void; onRecoverySaved:()=>void;
 }
 
@@ -40,7 +40,7 @@ function PasswordField({label,name,value,onChange,newPassword=false}:{label:stri
 function RecoveryCode({code,onDone,recovered=false}:{code:string;onDone:()=>void;recovered?:boolean}) {
   const [copied,setCopied]=useState(false),[saved,setSaved]=useState(false),[copyError,setCopyError]=useState('');
   useEffect(()=>{const guard=(event:BeforeUnloadEvent)=>{event.preventDefault();event.returnValue='';};window.addEventListener('beforeunload',guard);return()=>window.removeEventListener('beforeunload',guard);},[]);
-  return <section className="recovery-panel panel" aria-labelledby="recovery-title"><span className="learner-icon"><KeyRound size={25}/></span><span className="eyebrow">{recovered?'PASSWORD RESET':'ACCOUNT CREATED'}</span><h1 id="recovery-title">Save your private recovery code.</h1><p>This code lets you reset a forgotten password without an email address. Keep it somewhere safe and private. It will only be shown now.</p><div className="recovery-code"><code>{code}</code><button className="button secondary" type="button" onClick={async()=>{try{await navigator.clipboard.writeText(code);setCopied(true);setCopyError('');}catch{setCopyError('Please write down the code or select it to copy.');}}}>{copied?<Check size={17}/>:<Copy size={17}/>} {copied?'Copied':'Copy code'}</button></div>{copyError&&<p role="status" className="field-help">{copyError}</p>}<p className="recovery-note"><ShieldCheck size={18}/>Anyone with this code can reset your password. Don’t share it.</p><label className="learner-checkbox"><input type="checkbox" checked={saved} onChange={e=>setSaved(e.target.checked)}/>I have saved my recovery code in a safe place.</label><button className="button" disabled={!saved} onClick={onDone}>{recovered?'Continue to login':'Open My Learning Dashboard'}<ArrowRight size={18}/></button></section>;
+  return <section className="recovery-panel panel" aria-labelledby="recovery-title"><span className="learner-icon"><KeyRound size={25}/></span><span className="eyebrow">{recovered?'PASSWORD RESET':'ACCOUNT CREATED'}</span><h1 id="recovery-title">Save your private recovery code.</h1><p>This code lets you reset a forgotten password without an email address. Keep it somewhere safe and private. It will only be shown now.</p><div className="recovery-code"><code>{code}</code><button className="button secondary" type="button" onClick={async()=>{try{await navigator.clipboard.writeText(code);setCopied(true);setCopyError('');}catch{setCopyError('Please write down the code or select it to copy.');}}}>{copied?<Check size={17}/>:<Copy size={17}/>} {copied?'Copied':'Copy code'}</button></div>{copyError&&<p role="status" className="field-help">{copyError}</p>}<p className="recovery-note"><ShieldCheck size={18}/>Anyone with this code can reset your password. Don’t share it.</p><label className="learner-checkbox"><input type="checkbox" checked={saved} onChange={e=>setSaved(e.target.checked)}/>I have saved my recovery code in a safe place.</label><button className="button" disabled={!saved} onClick={onDone}>{recovered?'Continue to login':'Continue to learning'}<ArrowRight size={18}/></button></section>;
 }
 
 function AuthStory(){return <aside className="auth-story"><span className="eyebrow"><GraduationCap size={18}/>YOUR NEXT CHAPTER</span><h2>A little curiosity.<br/><em>A world of learning.</em></h2><p>One learner account, for wherever your school journey takes you in Uganda.</p><div className="auth-school-photo"><img src="/images/classroom-uganda.jpg" width={1440} height={960} alt="Students studying in a classroom in Uganda"/><span><BookOpen size={18}/>Made for Ugandan learners</span></div><div className="auth-story-points"><span><CheckCircle2 size={17}/>Primary P1–P7</span><span><CheckCircle2 size={17}/>Secondary S1–S6</span><span><CheckCircle2 size={17}/>Free access for now</span></div></aside>;}
@@ -124,7 +124,7 @@ function LearnerAccount({learner,onNavigate,onUpdated,onSignedOut}:{learner:Lear
 
       <div className="learner-free-note">
         <ShieldCheck size={21}/>
-        <p>Learning is free for now. You can also open published lessons and PDFs without logging in.</p>
+        <p>Learning is free for now. Your learner account opens the full library of lessons, PDFs and quizzes.</p>
       </div>
     </section>
   );
@@ -212,12 +212,8 @@ export default function LearnerPages(props:Props){
 
         setPassword('');
         setConfirmation('');
-        onAuthenticated(result);
-        
-        // Put student straight into their selected class to see their work
-        if (!result.recoveryCode && classLevel) {
-          onNavigate(classLevel.startsWith('S') ? 'secondary' : 'primary', classLevel);
-        }
+        await onAuthenticated(result);
+
       } else {
         const result = await api<{learner:Learner;recoveryCode?:string}>('/api/learner/login', {
           username: username.toLowerCase().trim(),
@@ -225,12 +221,8 @@ export default function LearnerPages(props:Props){
         });
         setPassword('');
         setConfirmation('');
-        onAuthenticated(result);
+        await onAuthenticated(result);
 
-        // Route student to their class or learning dashboard
-        if (result.learner?.classLevel) {
-          onNavigate(result.learner.classLevel.startsWith('S') ? 'secondary' : 'primary', result.learner.classLevel);
-        }
       }
     } catch(error) {
       setError((error as Error).message);
@@ -473,7 +465,7 @@ export default function LearnerPages(props:Props){
 
             <div className="auth-free-note">
               <ShieldCheck size={17}/>
-              <span>Your registration details and signed-in quiz marks are saved in the V-Learning School Management System. All published video lessons and PDFs are free for Ugandan schools. You can also explore without an account.</span>
+              <span>Your registration details and quiz marks are saved with your account. Watch selected preview videos before signing up, then log in for all lessons, notes and quizzes.</span>
             </div>
 
           </div>

@@ -3,6 +3,7 @@ const CHUNK = 8 * 1024 * 1024;
 const encoder = new TextEncoder();
 const schemaReady = new WeakMap();
 const schema = [
+  `CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS school_sync_queue (id TEXT PRIMARY KEY, version TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS school_sync_state (id INTEGER PRIMARY KEY CHECK(id=1), last_success TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '')`,
   `CREATE TABLE IF NOT EXISTS content (id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
@@ -54,6 +55,12 @@ async function initialize(db) {
       for(const column of ['school_name','phone','email'])if(!columns.includes(column)){
         try{await db.prepare(`ALTER TABLE learners ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`).run();}catch(error){if(!String(error).includes('duplicate column'))throw error;}
       }
+      // Retain one existing lesson as a public preview when enabling account access.
+      // The marker prevents a later edit, unpublish or new upload from choosing another.
+      await db.batch([
+        db.prepare(`UPDATE content SET data=json_set(data,'$.publicPreview',json('true')) WHERE id=(SELECT id FROM content WHERE kind='lesson' AND status='published' AND COALESCE(json_extract(data,'$.videoAssetId'),'')<>'' ORDER BY created_at DESC,id LIMIT 1) AND json_type(data,'$.publicPreview') IS NULL AND NOT EXISTS(SELECT 1 FROM app_settings WHERE key='member_access_v1')`),
+        db.prepare(`INSERT INTO app_settings(key,value) VALUES('member_access_v1','enabled') ON CONFLICT(key) DO NOTHING`)
+      ]);
     })().catch(error => { schemaReady.delete(db); throw error; });
     schemaReady.set(db, operation);
   }
@@ -328,14 +335,23 @@ function sanitize(entry, isAdmin = false) {
   if (!isAdmin && data.questions) data.questions = data.questions.map(({ question, options }) => ({ question, options }));
   return { ...data, id: entry.id, kind: entry.kind, status: entry.status, access: 'free', priceUGX: 0, createdAt: entry.created_at, updatedAt: entry.updated_at };
 }
-async function catalog(env, rows, isAdmin = false) {
+async function catalog(env, rows, isAdmin = false, isMember = false) {
   if (!rows.length) return [];
   const assetRows = await env.DB.prepare(`SELECT DISTINCT a.id,a.name,a.mime,a.size FROM assets a JOIN content_assets ca ON ca.asset_id=a.id JOIN content c ON c.id=ca.content_id WHERE a.state='ready' AND (a.mime LIKE 'video/%' OR a.mime='application/pdf') ${isAdmin ? '' : "AND c.status='published'"}`).all();
   const info = new Map(assetRows.results.map(asset => [asset.id, asset]));
   const registrations = await env.DB.prepare("SELECT event_id,SUM(participants) AS participants FROM event_registrations WHERE state='registered' GROUP BY event_id").all();
   const counts = new Map(registrations.results.map(row => [row.event_id, row.participants]));
   return rows.map(row => {
-    const item = sanitize(row, isAdmin); const ids = [item.videoAssetId, item.lowDataVideoAssetId, item.pdfAssetId].filter(Boolean);
+    const item = sanitize(row, isAdmin);
+    item.publicPreview = item.kind === 'lesson' && item.publicPreview === true;
+    item.requiresLogin = !isAdmin && !isMember && !item.publicPreview;
+    item.hasVideo = !!item.videoAssetId; item.hasPDF = !!item.pdfAssetId;
+    if (!isAdmin && !isMember) {
+      // The public catalog is a teaser; access to the underlying files is checked again.
+      if (item.requiresLogin) { item.videoAssetId='';item.lowDataVideoAssetId='';item.questions=[];item.galleryAssetIds=[];item.description=text(item.description,240); }
+      item.pdfAssetId='';
+    }
+    const ids = [item.videoAssetId, item.lowDataVideoAssetId, item.pdfAssetId].filter(Boolean);
     return { ...item, mediaInfo: Object.fromEntries(ids.filter(id => info.has(id)).map(id => [id, info.get(id)])), ...(item.kind === 'event' ? { registeredParticipants: counts.get(item.id) || 0 } : {}) };
   });
 }
@@ -351,6 +367,7 @@ function validateContent(input) {
   if (kind !== 'event') need((level === 'primary' ? /^P[1-7]$/ : /^S[1-6]$/).test(classLevel), 400, 'Choose a class in the selected school level.');
   const subject = text(input.subject, 100); if (kind !== 'event') need(subject.length > 0, 400, 'Enter the subject.');
   const data = { title, description: text(input.description, 10000), level, classLevel, subject, topic: text(input.topic, 150), teacherName: text(input.teacherName, 100) || 'Tr Ojok Mtn', access: 'free', priceUGX: 0,
+    publicPreview: kind === 'lesson' && input.publicPreview === true,
     videoAssetId: text(input.videoAssetId, 36), lowDataVideoAssetId: text(input.lowDataVideoAssetId, 36), pdfAssetId: text(input.pdfAssetId, 36), coverAssetId: text(input.coverAssetId, 36), galleryAssetIds: Array.isArray(input.galleryAssetIds) ? [...new Set(input.galleryAssetIds.map(x => text(x, 36)))].slice(0, 24) : [],
     eventType: ['Quiz', 'Seminar', 'Workshop', 'Other'].includes(input.eventType) ? input.eventType : 'Seminar', date: text(input.date, 10), time: text(input.time, 5), venue: text(input.venue, 200) };
   if (kind === 'event') {
@@ -404,8 +421,8 @@ async function learningLearnerAPI(request,env,path,method) {
     const saved = await env.DB.prepare("SELECT c.*,b.created_at AS saved_at FROM learner_bookmarks b JOIN content c ON c.id=b.content_id WHERE b.learner_id=? AND c.status='published' ORDER BY b.created_at DESC").bind(row.id).all();
     const progress = await env.DB.prepare("SELECT c.*,p.position,p.duration,p.completed,p.video_asset_id,p.updated_at AS progress_updated FROM learner_progress p JOIN content c ON c.id=p.content_id WHERE p.learner_id=? AND c.status='published' ORDER BY p.updated_at DESC").bind(row.id).all();
     const current = progress.results.filter(item => item.video_asset_id === JSON.parse(item.data).videoAssetId);
-    const items = await catalog(env,current);
-    return json({saved:await catalog(env,saved.results),progress:items.map((item,i)=>({item,position:current[i].position,duration:current[i].duration,completed:!!current[i].completed,updatedAt:current[i].progress_updated})),completed:current.filter(item=>item.completed).length});
+    const items = await catalog(env,current,false,true);
+    return json({saved:await catalog(env,saved.results,false,true),progress:items.map((item,i)=>({item,position:current[i].position,duration:current[i].duration,completed:!!current[i].completed,updatedAt:current[i].progress_updated})),completed:current.filter(item=>item.completed).length});
   }
   const itemMatch = /^\/api\/learner\/(item|bookmarks|progress)\/([a-f0-9-]{36})$/.exec(path);
   if(itemMatch) {
@@ -537,8 +554,12 @@ function verifyMagic(bytes, mime) {
 async function media(request, env, id) {
   const asset = await env.DB.prepare("SELECT * FROM assets WHERE id = ? AND state = 'ready'").bind(id).first();
   need(asset, 404, 'File not found.');
-  const published = await env.DB.prepare("SELECT 1 FROM content_assets ca JOIN content c ON c.id=ca.content_id WHERE ca.asset_id = ? AND c.status='published' LIMIT 1").bind(id).first();
-  need(published || await session(request, env), 404, 'File not found.');
+  const published = (await env.DB.prepare("SELECT c.kind,c.data FROM content_assets ca JOIN content c ON c.id=ca.content_id WHERE ca.asset_id = ? AND c.status='published'").bind(id).all()).results;
+  const publicFile=published.some(row=>{const data=JSON.parse(row.data);return (asset.mime.startsWith('image/')&&data.coverAssetId===id)||(asset.mime.startsWith('video/')&&row.kind==='lesson'&&data.publicPreview===true&&[data.videoAssetId,data.lowDataVideoAssetId].includes(id));});
+  if (!publicFile && !await session(request, env)) {
+    need(published.length,404,'File not found.');
+    need(await learnerSession(request,env),401,'Sign up or log in to access this learning material.');
+  }
   need(env.MEDIA, 503, 'File storage is not connected yet.');
   const meta = await env.MEDIA.head(asset.object_key); need(meta, 404, 'File not found.');
   const headers = new Headers({ 'Content-Type': asset.mime, 'Accept-Ranges': 'bytes', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store', 'Content-Length': String(meta.size), 'ETag': meta.httpEtag });
@@ -594,16 +615,19 @@ async function api(request, env) {
   if (path === '/api/announcements' && method === 'GET') return json({items:await publicAnnouncements(env)});
   if (path === '/api/content' && method === 'GET') {
     const rows = await env.DB.prepare("SELECT * FROM content WHERE status='published' ORDER BY created_at DESC LIMIT 500").all();
-    return json({ items: await catalog(env,rows.results), access: 'free' });
+    const member=!!await session(request,env)||!!await learnerSession(request,env);
+    return json({ items: await catalog(env,rows.results,false,member), access: 'free' });
   }
   const mediaMatch = /^\/api\/media\/([a-f0-9-]{36})$/.exec(path);
   if (mediaMatch && ['GET', 'HEAD'].includes(method)) return media(request, env, mediaMatch[1]);
   const gradeMatch = /^\/api\/quiz\/([a-f0-9-]{36})\/grade$/.exec(path);
   if (gradeMatch && method === 'POST') {
     const row = await env.DB.prepare("SELECT * FROM content WHERE id=? AND kind='quiz' AND status='published'").bind(gradeMatch[1]).first();
-    need(row, 404, 'Quiz not found.'); const data = JSON.parse(row.data); const input = await bodyJSON(request, 8192); const answers=input?.answers;
-    need(Array.isArray(answers) && answers.length === data.questions.length && answers.every(x => Number.isInteger(x) && x >= -1 && x <= 3), 400, 'Choose an answer for each question, then submit.');
+    need(row, 404, 'Quiz not found.');
     const learner=await learnerSession(request,env);
+    need(learner||await session(request,env),401,'Sign up or log in before taking a quiz so your marks can be saved.');
+    const data = JSON.parse(row.data); const input = await bodyJSON(request, 8192); const answers=input?.answers;
+    need(Array.isArray(answers) && answers.length === data.questions.length && answers.every(x => Number.isInteger(x) && x >= -1 && x <= 3), 400, 'Choose an answer for each question, then submit.');
     const submissionId=input.submissionId||crypto.randomUUID();
     need(/^[a-f0-9-]{36}$/.test(submissionId),400,'Invalid quiz submission.');
     if(learner){

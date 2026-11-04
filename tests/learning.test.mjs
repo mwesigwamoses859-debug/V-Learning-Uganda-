@@ -23,8 +23,8 @@ test('saved learning, revision, notices, school bookings and management use real
   lesson=await save({...base,videoAssetId:video,lowDataVideoAssetId:low,pdfAssetId:pdf});
   quiz=await save({...base,kind:'quiz',title:'Private result fixture',questions:[{question:'First?',options:['A','B','C','D'],answer:0,explanation:'First explanation'},{question:'Second?',options:['A','B','C','D'],answer:1,explanation:'Second explanation'}]});
   await t.test('file sizes describe only real published media and lower-data upload must be smaller',async()=>{
-   const items=(await (await guest.req('/api/content')).json()).items;const item=items.find(i=>i.id===lesson.id);assert.equal(item.mediaInfo[video].size,1200);assert.equal(item.mediaInfo[low].size,400);
-   assert.equal((await guest.req('/api/media/'+low)).status,200);
+   const items=(await (await alice.req('/api/content')).json()).items;const item=items.find(i=>i.id===lesson.id);assert.equal(item.mediaInfo[video].size,1200);assert.equal(item.mediaInfo[low].size,400);
+   assert.equal((await guest.req('/api/media/'+low)).status,401);assert.equal((await alice.req('/api/media/'+low)).status,200);
    assert.equal((await admin.req('/api/admin/content',{...base,videoAssetId:low,lowDataVideoAssetId:video})).status,400);
    assert.equal((await admin.req('/api/admin/content',{...base,videoAssetId:video,lowDataVideoAssetId:video})).status,400);
   });
@@ -52,7 +52,7 @@ test('saved learning, revision, notices, school bookings and management use real
    await save(lesson);
   });
   await t.test('quiz scores are server-marked, idempotent, private and retain reviewed questions',async()=>{
-   await guest.req('/api/quiz/'+quiz.id+'/grade',{answers:[0,0]});
+   assert.equal((await guest.req('/api/quiz/'+quiz.id+'/grade',{answers:[0,0]})).status,401);
    assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM learner_quiz_results').first()).n,0);
    const submissionId=randomUUID(),input={answers:[0,0],submissionId,correct:100,quizUpdatedAt:quiz.updatedAt};
    const results=await Promise.all([alice.req('/api/quiz/'+quiz.id+'/grade',input),alice.req('/api/quiz/'+quiz.id+'/grade',input)]);
