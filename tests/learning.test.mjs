@@ -13,12 +13,13 @@ test('saved learning, revision, notices, school bookings and management use real
  const mf=new Miniflare({modules:true,script,compatibilityDate:'2026-07-30',d1Databases:['DB'],r2Buckets:['MEDIA'],bindings:{ADMIN_PASSWORD:password}});
  const admin=client(mf),alice=client(mf),bob=client(mf),guest=client(mf);let db,video,low,pdf,lesson,quiz,event;
  const base={kind:'lesson',status:'published',title:'Isolated teacher lesson',description:'Fixture used only in this test runtime',level:'primary',classLevel:'P7',subject:'Science',topic:'Plants',teacherName:'Teacher'};
- async function upload(name,mime,size){const bytes=new Uint8Array(size);bytes.set(new TextEncoder().encode(mime==='application/pdf'?'%PDF-1.4\n':'0000ftypisom'));const r=await admin.req('/api/uploads',{name,mime,size});assert.equal(r.status,201);const {id}=await r.json();assert.equal((await admin.req('/api/uploads/'+id,bytes,'PUT')).status,200);return id;}
+ async function upload(name,mime,size){const bytes=new Uint8Array(size);bytes.set(new TextEncoder().encode(mime==='application/pdf'?'%PDF-1.4\n':mime==='image/jpeg'?'\xff\xd8\xff':'0000ftypisom'));if(mime==='image/jpeg')bytes.set([255,216,255]);const r=await admin.req('/api/uploads',{name,mime,size});assert.equal(r.status,201);const {id}=await r.json();assert.equal((await admin.req('/api/uploads/'+id,bytes,'PUT')).status,200);return id;}
  async function save(input){const r=await admin.req('/api/admin/content',input);assert.equal(r.status,200,JSON.stringify(await r.clone().json()));return (await r.json()).item;}
  try{
   assert.equal((await admin.req('/api/login',{password})).status,200);
   for(const [user,name,cls] of [[alice,'learning.alice','P7'],[bob,'learning.bob','S4']])assert.equal((await user.req('/api/learner/signup',{username:name,displayName:name.split('.')[1],classLevel:cls,password})).status,201);
   db=await mf.getD1Database('DB');video=await upload('lesson.mp4','video/mp4',1200);low=await upload('smaller.mp4','video/mp4',400);pdf=await upload('real-upload.pdf','application/pdf',300);
+  base.coverAssetId=await upload('thumbnail.jpg','image/jpeg',80);
   lesson=await save({...base,videoAssetId:video,lowDataVideoAssetId:low,pdfAssetId:pdf});
   quiz=await save({...base,kind:'quiz',title:'Private result fixture',questions:[{question:'First?',options:['A','B','C','D'],answer:0,explanation:'First explanation'},{question:'Second?',options:['A','B','C','D'],answer:1,explanation:'Second explanation'}]});
   await t.test('file sizes describe only real published media and lower-data upload must be smaller',async()=>{

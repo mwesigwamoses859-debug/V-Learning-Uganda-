@@ -6,7 +6,7 @@ Contact: **Tr Ojok Mtn · +256 778 441681**.
 
 ## Interface
 
-The public interface follows the supplied Stitch “Equatorial Clarity” homepage layout, with the official V-Learning Uganda logo and its magenta (`#BE1373`) and yellow (`#F8D346`) as the main colours. Deep navy (`#24324B`) supports headings and body text, while small teal (`#167D7F`) icons, badges and highlights complement the main magenta and yellow palette. White cards, light pink backgrounds and Plus Jakarta Sans keep the learning pages readable. The uploaded logo is served unchanged from `public/brand/v-learning-uganda-logo.jpg`. The same tokens style the learning libraries, event pages and administrator publishing tools. The application uses its existing live API rather than placeholder content.
+The public interface uses the official V-Learning Uganda logo and its magenta (`#BE1373`) and yellow (`#F8D346`) as the main colours. Deep navy (`#24324B`) supports headings and body text, while small teal (`#167D7F`) icons, badges and highlights complement the palette. White cards, light pink backgrounds and Plus Jakarta Sans keep the learning pages readable. The uploaded logo is served unchanged from `public/brand/v-learning-uganda-logo.jpg`. The homepage starts with search and a featured lesson, followed by a Primary/Secondary class chooser, latest videos, notes, exam revision and any published quizzes/events. It uses the existing live API rather than placeholder content.
 
 ## School photographs and YouTube
 
@@ -37,6 +37,8 @@ Open `/admin`. Create a video lesson, PDF resource, practice quiz or event. Choo
 
 Videos: MP4, WebM or MOV up to 1 GB. PDFs: up to 25 MB. Photos: JPG, PNG or WebP up to 10 MB each, with up to 24 photos per event. Videos above 8 MB use multipart chunks within an upload session; interrupted page sessions must restart. Native playback supports byte ranges. Compressed MP4 is recommended for mobile data; adaptive transcoding is not included.
 
+Uploading a standard video captures an actual frame in the administrator's browser and saves a 960 × 540 JPEG thumbnail in R2. Upload a custom JPG/PNG/WebP or choose **Generate from video** to replace it. Publishing a video requires a valid image attachment; unreadable video formats can use a custom image. Existing videos without saved covers attempt a local frame preview only near the viewport, with a branded fallback if unavailable or data saving is enabled. Videos never autoplay to generate a thumbnail.
+
 All published content is publicly accessible without learner registration or payment. The server forces free access and zero prices. Learner accounts are optional; future paid access still requires a payment provider and entitlement checks. Hosting follows the Cloudflare account's existing usage plan.
 
 Practice quizzes use manually entered, teacher-reviewed questions and server-side marking. Answers are hidden from the public catalog until submission. PDFs can be attached as supporting material. Automatic PDF extraction/OCR, live multiplayer quizzes and payments remain future work.
@@ -65,7 +67,7 @@ For lessons or event recordings, the administrator can upload a smaller compress
 
 ## Student management, announcements and attendance
 
-The admin dashboard has **Content & revision**, **Students**, **Announcements**, and **Registration & attendance** sections. The student list searches names/usernames, filters classes and pages 50 learners at a time. It shows only profile/class, joining date and last recorded login; hashes, recovery codes and session tokens are never returned. Existing accounts acquire a last-login record on their next login.
+The admin dashboard has **School management**, **Content & revision**, **Students**, **Announcements**, and **Registration & attendance** sections. The student list searches names/usernames, filters classes and pages 50 learners at a time. It shows only profile/class, joining date and last recorded login; hashes, recovery codes and session tokens are never returned. Existing accounts acquire a last-login record on their next login.
 
 Announcements can be drafted, published/unpublished, pinned, addressed to all learners/a level/a class, and optionally expire at the end of a Uganda date. Public active announcements appear on the homepage, while the student dashboard selects those matching the learner's class. There are no emails, SMS messages or push notifications.
 
@@ -79,7 +81,9 @@ School contact details and attendance are visible only to the registrant and adm
 
 ## Connected school management system
 
-The school portal is https://v-learning-school-management-system.mwesigwamoses859.workers.dev/. Its source is in `mwesigwamoses859-debug/v-learning-school-management-system`. A footer link opens the staff portal; a signed-in administrator can use **Open school management** to exchange a 60-second one-use code for a private school staff session.
+The school portal is https://v-learning-school-management-system.mwesigwamoses859.workers.dev/. Its source is in `mwesigwamoses859-debug/v-learning-school-management-system`. The footer opens `/admin?section=school`. After administrator sign-in, the **School management** tab embeds the full school workspace using a 60-second one-use code for a private staff session. The embedded school keeps its opaque token in memory so third-party cookies are optional. Only the production learning origin can frame the school portal.
+
+For direct school sign-in, open **Separate school username & password → Create my school login** in that private tab. It creates `schooladmin` once, displays the random initial password only in the current response and requires changing it at first login. Only its salted PBKDF2 hash is stored. Repeating the request does not reset an existing account. No initial password is present in source control, and the existing learning `ADMIN_PASSWORD` is never read or changed by this feature.
 
 Bind production `SCHOOL_DB` to the existing `v-learning-sms-db` D1 database and redeploy Pages. Keep the original `DB`, `MEDIA` and `ADMIN_PASSWORD` settings. No integration secret is exposed to the frontend. Registrations now store student name, school, class and optional phone/email in D1, rather than browser storage. Profile edits update these same server records. Each original registration/profile update and signed-in graded quiz attempt is committed with a durable outbox event, then copied into the school database. Unavailable school connections leave the event pending; learner-session checks and **Sync saved records** retry them. The latter also backfills existing learners and quiz results in bounded batches.
 

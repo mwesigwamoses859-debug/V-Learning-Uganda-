@@ -218,6 +218,17 @@ async function schoolAdminAPI(request,env,path,method,url) {
   const pending=await env.DB.prepare('SELECT COUNT(*) AS count FROM school_sync_queue').first();
   return json({synced,pending:pending.count,next:rows.results.length===100?rows.results.at(-1).id:null});
  }
+ if(path==='/api/admin/school-login'&&method==='POST') {
+  need(env.SCHOOL_DB,503,'The school database connection is awaiting activation.');
+  const username='schooladmin';
+  const existing=await env.SCHOOL_DB.prepare('SELECT username FROM staff WHERE username=?').bind(username).first();
+  need(!existing,409,'A separate school login already exists. Use the login you saved, or open the school workspace here to manage staff access.');
+  const password='VL-'+randomHex(12)+'!8',salt=randomHex(24),now=Date.now();
+  const passwordHash=await passwordKey(password,salt,PASSWORD_ITERATIONS);
+  const inserted=await env.SCHOOL_DB.prepare(`INSERT INTO staff(username,name,email,role,subjects,classes,active_terms,active,password_hash,password_salt,password_iterations,must_change_password,password_changed_at) VALUES(?,'School Administrator','schooladmin@vlearning.invalid','Headteacher','["All"]','["P.1","P.2","P.3","P.4","P.5","P.6","P.7","S.1","S.2","S.3","S.4","S.5","S.6"]','[1,2,3]',1,?,?,?,1,?) ON CONFLICT(username) DO NOTHING`).bind(username,passwordHash,salt,PASSWORD_ITERATIONS,now).run();
+  need(inserted.meta.changes===1,409,'This school login was just created. Use the login details already shown.');
+  return json({username,password,mustChangePassword:true},201);
+ }
  if(path==='/api/admin/school-access'&&method==='POST') {
   need(env.SCHOOL_DB,503,'The school database connection is awaiting activation.');
   await initializeSchool(env.SCHOOL_DB);
@@ -370,6 +381,7 @@ function validateContent(input) {
   }
   if (status === 'published') {
     if (kind === 'lesson') need(data.videoAssetId, 400, 'Upload the actual lesson video before publishing.');
+    if (data.videoAssetId) need(data.coverAssetId,400,'Add a video thumbnail before publishing. Generate one from the video or upload an image.');
     if (kind === 'pdf') need(data.pdfAssetId, 400, 'Upload a PDF before publishing.');
     if (kind === 'quiz') need(data.questions.length, 400, 'Add at least one question before publishing.');
   }

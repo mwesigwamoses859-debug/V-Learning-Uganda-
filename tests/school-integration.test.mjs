@@ -1,3 +1,4 @@
+import {pbkdf2Sync} from 'node:crypto';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
@@ -44,4 +45,21 @@ test('missing or failed school connection keeps a durable queue for later retry'
  const school=await schoolSetup(retry);await student.request('/api/learner/session');
  assert.equal((await school.prepare('SELECT COUNT(*) AS n FROM students').first()).n,1);assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM school_sync_queue').first()).n,0);
  }finally{await retry.dispose();}
+});
+
+test('separate school logins are owner-only, stored as hashes and never silently reset',async()=>{
+ const mf=runtime(),admin=client(mf),guest=client(mf);try{
+  assert.equal((await guest.request('/api/admin/school-login',{})).status,401);
+  await admin.request('/api/login',{password:'isolated administrator test phrase'});
+  const db=await schoolSetup(mf);
+  await db.prepare(`CREATE TABLE staff(username TEXT PRIMARY KEY,name TEXT,email TEXT,role TEXT,subjects TEXT,classes TEXT,active_terms TEXT,active INTEGER,password_hash TEXT,password_salt TEXT,password_iterations INTEGER,must_change_password INTEGER,password_changed_at INTEGER)`).run();
+  const response=await admin.request('/api/admin/school-login',{});assert.equal(response.status,201);const login=await response.json();
+  assert.equal(login.username,'schooladmin');assert.ok(login.password.length>=24);assert.equal(login.mustChangePassword,true);
+  const row=await db.prepare("SELECT * FROM staff WHERE username='schooladmin'").first();
+  assert.equal(row.role,'Headteacher');assert.equal(row.must_change_password,1);
+  assert.equal(row.password_hash,pbkdf2Sync(login.password,Buffer.from(row.password_salt,'hex'),100000,32,'sha256').toString('hex'));
+  assert.equal(JSON.stringify(row).includes(login.password),false);
+  assert.equal((await admin.request('/api/admin/school-login',{})).status,409);
+  assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM staff').first()).n,1);
+ }finally{await mf.dispose();}
 });

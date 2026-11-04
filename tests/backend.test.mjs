@@ -51,7 +51,15 @@ test('durable content, file access, sessions and quizzes',async t=>{
       const upload=await (await req('/api/uploads',{name:'lesson.mp4',mime:'video/mp4',size})).json();assert.equal(upload.multipart,true);const parts=[];
       for(let offset=0,number=1;offset<size;offset+=upload.chunkSize,number++){const r=await req('/api/uploads/'+upload.id+'/part/'+number,bytes.slice(offset,offset+upload.chunkSize),{method:'PUT'});assert.equal(r.status,200);parts.push(await r.json());}
       assert.equal((await req('/api/uploads/'+upload.id+'/complete',{parts})).status,200);
-      const saved=await req('/api/admin/content',{...content,kind:'lesson',title:'Uploaded video',status:'published',videoAssetId:upload.id});assert.equal(saved.status,200);
+      const lesson={...content,kind:'lesson',title:'Uploaded video',status:'published',videoAssetId:upload.id};
+      assert.equal((await req('/api/admin/content',lesson)).status,400,'a published video must have a thumbnail');
+      assert.equal((await req('/api/admin/content',{...lesson,coverAssetId:pdfId})).status,400,'a PDF cannot be used as a thumbnail');
+      const coverBytes=new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aSx8AAAAASUVORK5CYII=','base64'));
+      const cover=await (await req('/api/uploads',{name:'video-thumbnail.png',mime:'image/png',size:coverBytes.length})).json();
+      assert.equal((await req('/api/uploads/'+cover.id,coverBytes,{method:'PUT'})).status,200);
+      const saved=await req('/api/admin/content',{...lesson,coverAssetId:cover.id});assert.equal(saved.status,200);
+      assert.equal((await saved.json()).item.coverAssetId,cover.id);
+      assert.equal((await req('/api/media/'+cover.id,undefined,{headers:{Cookie:''}})).status,200);
       const video=await req('/api/media/'+upload.id,undefined,{headers:{Range:'bytes='+String(size-1)+'-'}});assert.equal(video.status,206);assert.deepEqual(new Uint8Array(await video.arrayBuffer()),new Uint8Array([73]));
     });
     await t.test('quiz answer keys stay private until server-side marking',async()=>{
