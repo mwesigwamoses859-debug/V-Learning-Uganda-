@@ -1,0 +1,10 @@
+import {useEffect,useState} from 'react';
+import {ExternalLink,RefreshCw,School} from 'lucide-react';
+import {api} from '../api';
+export default function SchoolConnection(){
+ const [status,setStatus]=useState<{connected:boolean;pending:number;last_success?:string;last_error?:string}|null>(null),[busy,setBusy]=useState(''),[error,setError]=useState('');
+ async function refresh(){setStatus(await api('/api/admin/school-status'));}
+ useEffect(()=>{refresh().catch(e=>setError(e.message));},[]);
+ async function synchronize(){setBusy('sync');setError('');try{for(const kind of ['learner','quiz']){let after='';do{const result=await api<{next:string|null;synced:boolean}>('/api/admin/school-sync',{kind,after});if(!result.synced)throw new Error('The school connection needs attention. Records remain saved and queued.');after=result.next||'';}while(after);}await refresh();}catch(e){setError((e as Error).message);}finally{setBusy('');}}
+ return <section className="panel school-connection"><div><span className="eyebrow"><School size={16}/>SCHOOL MANAGEMENT</span><h2>Student records & quiz marks</h2><p>New registrations and signed-in quiz results are sent automatically to your school system.</p><p className="field-help">{status?.connected?`${status.pending} records waiting to sync. ${status.last_success?'Last checked '+new Date(status.last_success).toLocaleString('en-UG',{timeZone:'Africa/Kampala'}):'Awaiting the first record.'}`:'School connection awaiting activation.'}</p></div><div className="school-connection-actions"><button className="button" disabled={!!busy||!status?.connected} onClick={async()=>{setBusy('open');setError('');try{const result=await api<{url:string}>('/api/admin/school-access',{});window.location.assign(result.url);}catch(e){setError((e as Error).message);setBusy('');}}}><ExternalLink size={17}/>{busy==='open'?'Opening…':'Open school management'}</button><button className="button secondary" disabled={!!busy||!status?.connected} onClick={synchronize}><RefreshCw size={17}/>{busy==='sync'?'Synchronizing…':'Sync saved records'}</button></div>{error&&<p role="alert" className="error-text">{error}</p>}</section>;
+}

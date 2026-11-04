@@ -1,7 +1,10 @@
+import {initializeSchool, storeSchoolEvent} from './school-records.mjs';
 const CHUNK = 8 * 1024 * 1024;
 const encoder = new TextEncoder();
 const schemaReady = new WeakMap();
 const schema = [
+  `CREATE TABLE IF NOT EXISTS school_sync_queue (id TEXT PRIMARY KEY, version TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS school_sync_state (id INTEGER PRIMARY KEY CHECK(id=1), last_success TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '')`,
   `CREATE TABLE IF NOT EXISTS content (id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS assets (id TEXT PRIMARY KEY, object_key TEXT NOT NULL, name TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, state TEXT NOT NULL, upload_id TEXT, created_at INTEGER NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS content_assets (content_id TEXT NOT NULL, asset_id TEXT NOT NULL, PRIMARY KEY(content_id, asset_id))`,
@@ -46,7 +49,12 @@ function adminSetupIssue(env) {
 function configured(env) { return adminSetupIssue(env) === null; }
 async function initialize(db) {
   if (!schemaReady.has(db)) {
-    const operation = db.batch(schema.map(sql => db.prepare(sql))).catch(error => { schemaReady.delete(db); throw error; });
+    const operation = (async()=>{await db.batch(schema.map(sql => db.prepare(sql)));
+      const columns=(await db.prepare('PRAGMA table_info(learners)').all()).results.map(x=>x.name);
+      for(const column of ['school_name','phone','email'])if(!columns.includes(column)){
+        try{await db.prepare(`ALTER TABLE learners ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`).run();}catch(error){if(!String(error).includes('duplicate column'))throw error;}
+      }
+    })().catch(error => { schemaReady.delete(db); throw error; });
     schemaReady.set(db, operation);
   }
   await schemaReady.get(db);
@@ -109,10 +117,16 @@ function learnerProfile(input) {
   need(typeof input.displayName === 'string' && input.displayName.trim().length >= 2 && input.displayName.trim().length <= 80 && !/[\x00-\x1f\x7f]/.test(input.displayName), 400, 'Enter a first name or nickname with 2–80 characters.');
   const classLevel = input.classLevel ?? '';
   need(typeof classLevel === 'string' && (classLevel === '' || /^(P[1-7]|S[1-6])$/.test(classLevel)), 400, 'Choose a Primary or Secondary class, or leave the class open.');
-  return { displayName: input.displayName.trim(), classLevel };
+  const schoolName=typeof input.schoolName==='string'?input.schoolName.trim():'';
+  const phone=typeof input.phone==='string'?input.phone.trim():'';
+  const email=typeof input.email==='string'?input.email.trim().toLowerCase():'';
+  need(schoolName.length<=150&&!/[\x00-\x1f\x7f]/.test(schoolName),400,'Use a school name up to 150 characters.');
+  need(!phone||/^\+?[0-9 ()-]{7,25}$/.test(phone),400,'Enter a valid contact phone number or leave it blank.');
+  need(!email||(email.length<=254&&/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)),400,'Enter a valid email address or leave it blank.');
+  return { displayName: input.displayName.trim(), classLevel,schoolName,phone,email };
 }
 function publicLearner(row) {
-  return { id: row.id, username: row.username, displayName: row.display_name, classLevel: row.class_level, createdAt: row.created_at };
+  return { id: row.id, username: row.username, displayName: row.display_name, classLevel: row.class_level, schoolName:row.school_name||'', phone:row.phone||'', email:row.email||'', createdAt: row.created_at };
 }
 async function passwordKey(password, salt, iterations) {
   const key = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
@@ -163,9 +177,63 @@ async function learnerRateLimit(request, env, action, name = '', period = 900000
     need(attempt.attempts <= limit, 429, action === 'signup' ? 'Too many account requests. Please try again in an hour.' : 'Too many attempts. Please wait 15 minutes and try again.');
   }
 }
+function learnerEvent(row) {
+ return {kind:'learner',learner:{...publicLearner(row),updatedAt:row.updated_at}};
+}
+function quizEvent(row) {
+ const snapshot=JSON.parse(row.snapshot);
+ return {kind:'quiz',result:{id:row.id,learnerId:row.learner_id,contentId:row.content_id,submissionId:row.submission_id,title:snapshot.title,subject:snapshot.subject,topic:snapshot.topic,classLevel:snapshot.classLevel,correct:row.correct,total:row.total,createdAt:row.created_at}};
+}
+function queueSchool(db,id,event) {
+ const values=event.kind==='learner'?`SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM learners WHERE id=?)`:`VALUES(?,?,?,?)`;
+ return db.prepare(`INSERT INTO school_sync_queue(id,version,payload,created_at) ${values} ON CONFLICT(id) DO UPDATE SET version=excluded.version,payload=excluded.payload,created_at=excluded.created_at`).bind(id,crypto.randomUUID(),JSON.stringify(event),new Date().toISOString(),...(event.kind==='learner'?[event.learner.id]:[]));
+}
+async function flushSchool(env,limit=25) {
+ if(!env.SCHOOL_DB)return false;
+ try {
+  const rows=await env.DB.prepare('SELECT * FROM school_sync_queue ORDER BY created_at,id LIMIT ?').bind(limit).all();
+  for(const row of rows.results) {
+   await storeSchoolEvent(env.SCHOOL_DB,JSON.parse(row.payload));
+   await env.DB.prepare('DELETE FROM school_sync_queue WHERE id=? AND version=?').bind(row.id,row.version).run();
+  }
+  await env.DB.prepare(`INSERT INTO school_sync_state(id,last_success,last_error) VALUES(1,?,'') ON CONFLICT(id) DO UPDATE SET last_success=excluded.last_success,last_error=''`).bind(new Date().toISOString()).run();
+  return true;
+ } catch(error) {
+  // A school outage must not lose the original learner registration or score.
+  await env.DB.prepare(`INSERT INTO school_sync_state(id,last_error) VALUES(1,'School connection needs attention') ON CONFLICT(id) DO UPDATE SET last_error=excluded.last_error`).run();
+  return false;
+ }
+}
+async function schoolAdminAPI(request,env,path,method,url) {
+ if(path==='/api/admin/school-status'&&method==='GET') {
+  const pending=await env.DB.prepare('SELECT COUNT(*) AS count FROM school_sync_queue').first();
+  const state=await env.DB.prepare('SELECT last_success,last_error FROM school_sync_state WHERE id=1').first();
+  return json({connected:!!env.SCHOOL_DB,pending:pending.count,...state});
+ }
+ if(path==='/api/admin/school-sync'&&method==='POST') {
+  const input=await bodyJSON(request,4096),after=text(input.after,36),kind=input.kind==='quiz'?'quiz':'learner';
+  const rows=await env.DB.prepare(kind==='learner'?'SELECT * FROM learners WHERE id>? ORDER BY id LIMIT 100':'SELECT * FROM learner_quiz_results WHERE id>? ORDER BY id LIMIT 100').bind(after).all();
+  if(rows.results.length)await env.DB.batch(rows.results.map(row=>queueSchool(env.DB,kind+':'+row.id,kind==='learner'?learnerEvent(row):quizEvent(row))));
+  const synced=await flushSchool(env,100);
+  const pending=await env.DB.prepare('SELECT COUNT(*) AS count FROM school_sync_queue').first();
+  return json({synced,pending:pending.count,next:rows.results.length===100?rows.results.at(-1).id:null});
+ }
+ if(path==='/api/admin/school-access'&&method==='POST') {
+  need(env.SCHOOL_DB,503,'The school database connection is awaiting activation.');
+  await initializeSchool(env.SCHOOL_DB);
+  const code=randomHex(32);
+  await env.SCHOOL_DB.batch([
+   env.SCHOOL_DB.prepare('DELETE FROM school_access_codes WHERE expires<=?').bind(Date.now()),
+   env.SCHOOL_DB.prepare('INSERT INTO school_access_codes(code_hash,expires) VALUES(?,?)').bind(await digest(code),Date.now()+60000)
+  ]);
+  return json({url:'https://v-learning-school-management-system.mwesigwamoses859.workers.dev/#school_code='+code});
+ }
+ return null;
+}
 async function learnerAPI(request, env, path, method) {
   if (path === '/api/learner/session' && method === 'GET') {
     const row = await learnerSession(request, env);
+    await flushSchool(env);
     return json({ learner: row ? publicLearner(row) : null });
   }
   if (path === '/api/learner/logout' && method === 'POST') {
@@ -182,9 +250,14 @@ async function learnerAPI(request, env, path, method) {
     need(!exists, 409, 'That username is already taken. Try a different username or log in.');
     const id = crypto.randomUUID(); const now = new Date().toISOString(); const recoveryCode = newRecoveryCode();
     const passwordHash = await hashPassword(password); const recoveryHash = await recoveryDigest(recoveryCode);
-    const inserted = await env.DB.prepare('INSERT INTO learners(id, username, display_name, class_level, password_hash, recovery_hash, credential_version, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?) ON CONFLICT(username) DO NOTHING').bind(id, name, profile.displayName, profile.classLevel, passwordHash, recoveryHash, now, now).run();
+    const newRow={id,username:name,display_name:profile.displayName,class_level:profile.classLevel,school_name:profile.schoolName,phone:profile.phone,email:profile.email,created_at:now,updated_at:now};
+    const [inserted] = await env.DB.batch([
+     env.DB.prepare('INSERT INTO learners(id,username,display_name,class_level,school_name,phone,email,password_hash,recovery_hash,credential_version,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT(username) DO NOTHING').bind(id,name,profile.displayName,profile.classLevel,profile.schoolName,profile.phone,profile.email,passwordHash,recoveryHash,now,now),
+     queueSchool(env.DB,'learner:'+id,learnerEvent(newRow))
+    ]);
     need(inserted.meta.changes === 1, 409, 'That username is already taken. Try a different username or log in.');
     const row = await env.DB.prepare('SELECT * FROM learners WHERE id = ?').bind(id).first();
+    await flushSchool(env);
     return json({ learner: publicLearner(row), recoveryCode }, 201, { 'Set-Cookie': await issueLearnerSession(request, env, row) });
   }
   if (path === '/api/learner/login' && method === 'POST') {
@@ -219,9 +292,14 @@ async function learnerAPI(request, env, path, method) {
     const input = await bodyJSON(request, 4096);
     need(input && typeof input === 'object' && !Array.isArray(input), 400, 'Enter your account details.');
     if (path.endsWith('/profile')) {
-      const profile = learnerProfile(input);
-      await env.DB.prepare('UPDATE learners SET display_name = ?, class_level = ?, updated_at = ? WHERE id = ?').bind(profile.displayName, profile.classLevel, new Date().toISOString(), row.id).run();
-      return json({ learner: publicLearner({ ...row, display_name: profile.displayName, class_level: profile.classLevel }) });
+      const profile = learnerProfile({...input,schoolName:input.schoolName??row.school_name,phone:input.phone??row.phone,email:input.email??row.email});
+      const updated={...row,display_name:profile.displayName,class_level:profile.classLevel,school_name:profile.schoolName,phone:profile.phone,email:profile.email,updated_at:new Date().toISOString()};
+      await env.DB.batch([
+       env.DB.prepare('UPDATE learners SET display_name=?,class_level=?,school_name=?,phone=?,email=?,updated_at=? WHERE id=?').bind(profile.displayName,profile.classLevel,profile.schoolName,profile.phone,profile.email,updated.updated_at,row.id),
+       queueSchool(env.DB,'learner:'+row.id,learnerEvent(updated))
+      ]);
+      await flushSchool(env);
+      return json({ learner: publicLearner(updated) });
     }
     await learnerRateLimit(request, env, 'password', row.username);
     need(typeof input.currentPassword === 'string' && input.currentPassword.length <= 128 && await checkPassword(input.currentPassword, row.password_hash), 401, 'Your current password is incorrect.');
@@ -518,7 +596,7 @@ async function api(request, env) {
     need(/^[a-f0-9-]{36}$/.test(submissionId),400,'Invalid quiz submission.');
     if(learner){
       const prior=await env.DB.prepare('SELECT * FROM learner_quiz_results WHERE learner_id=? AND submission_id=?').bind(learner.id,submissionId).first();
-      if(prior){need(prior.content_id===row.id,409,'Start a fresh quiz submission.');return json({correct:prior.correct,total:prior.total,review:JSON.parse(prior.snapshot).review,saved:true});}
+      if(prior){need(prior.content_id===row.id,409,'Start a fresh quiz submission.');await flushSchool(env);return json({correct:prior.correct,total:prior.total,review:JSON.parse(prior.snapshot).review,saved:true});}
       await learnerRateLimit(request,env,'quiz-result',learner.username,900000,120,60);
     }
     need(!input.quizUpdatedAt || input.quizUpdatedAt===row.updated_at,409,'This quiz was updated. Close it and refresh the library before trying again.');
@@ -526,7 +604,12 @@ async function api(request, env) {
     const correct=review.filter(q => q.correct).length;
     if(learner){
       const snapshot={title:data.title,subject:data.subject,topic:data.topic,classLevel:data.classLevel,review};
-      await env.DB.prepare('INSERT INTO learner_quiz_results(id,learner_id,content_id,submission_id,correct,total,snapshot,created_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(learner_id,submission_id) DO NOTHING').bind(crypto.randomUUID(),learner.id,row.id,submissionId,correct,review.length,JSON.stringify(snapshot),new Date().toISOString()).run();
+      const resultId=crypto.randomUUID(),createdAt=new Date().toISOString();
+      await env.DB.batch([
+       env.DB.prepare('INSERT INTO learner_quiz_results(id,learner_id,content_id,submission_id,correct,total,snapshot,created_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(learner_id,submission_id) DO NOTHING').bind(resultId,learner.id,row.id,submissionId,correct,review.length,JSON.stringify(snapshot),createdAt),
+       env.DB.prepare(`INSERT INTO school_sync_queue(id,version,payload,created_at) SELECT 'quiz:'||id,?,json_object('kind','quiz','result',json_object('id',id,'learnerId',learner_id,'contentId',content_id,'submissionId',submission_id,'title',json_extract(snapshot,'$.title'),'subject',json_extract(snapshot,'$.subject'),'topic',json_extract(snapshot,'$.topic'),'classLevel',json_extract(snapshot,'$.classLevel'),'correct',correct,'total',total,'createdAt',created_at)),? FROM learner_quiz_results WHERE learner_id=? AND submission_id=? ON CONFLICT(id) DO NOTHING`).bind(crypto.randomUUID(),createdAt,learner.id,submissionId)
+      ]);
+      await flushSchool(env);
       const stored=await env.DB.prepare('SELECT * FROM learner_quiz_results WHERE learner_id=? AND submission_id=?').bind(learner.id,submissionId).first();
       need(stored.content_id===row.id,409,'Start a fresh quiz submission.');
       return json({correct:stored.correct,total:stored.total,review:JSON.parse(stored.snapshot).review,saved:true});
@@ -534,6 +617,7 @@ async function api(request, env) {
     return json({ correct, total: review.length, review, saved:false });
   }
   await requireAdmin(request, env);
+  const schoolResponse=await schoolAdminAPI(request,env,path,method,url);if(schoolResponse)return schoolResponse;
   const extra=await adminLearningAPI(request,env,path,method,url);if(extra)return extra;
   if (path === '/api/admin/content' && method === 'GET') {
     const rows = await env.DB.prepare('SELECT * FROM content ORDER BY updated_at DESC LIMIT 500').all(); return json({ items: await catalog(env,rows.results,true) });

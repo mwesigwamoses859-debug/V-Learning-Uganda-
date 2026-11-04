@@ -1,10 +1,11 @@
+import {build} from 'esbuild';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {pbkdf2Sync, createHash} from 'node:crypto';
 import {Miniflare} from 'miniflare';
 
-const script=await readFile(new URL('../server/worker.mjs',import.meta.url),'utf8');
+const script=(await build({entryPoints:[new URL('../server/worker.mjs',import.meta.url).pathname],bundle:true,write:false,format:'esm',platform:'browser'})).outputFiles[0].text;
 const origin='https://learning.example';
 const password='isolated learner phrase for tests';
 const changedPassword='different isolated learner phrase';
@@ -49,7 +50,7 @@ test('real learner lifecycle is durable, private and separate from administratio
       assert.equal(row.recovery_hash,hash('vl-learner-recovery:'+recoveryCode.replaceAll('-','')));
       assert.equal(JSON.stringify(row).includes(password),false);assert.equal(JSON.stringify(row).includes(recoveryCode),false);
       const token=alice.cookie.split('=')[1];const session=await db.prepare('SELECT * FROM learner_sessions WHERE learner_id=?').bind(learnerId).first();assert.equal(session.token_hash,hash(token));assert.notEqual(session.token_hash,token);
-      const current=await (await alice.request('/api/learner/session')).json();assert.equal(current.learner.id,learnerId);assert.deepEqual(Object.keys(current.learner).sort(),['classLevel','createdAt','displayName','id','username']);
+      const current=await (await alice.request('/api/learner/session')).json();assert.equal(current.learner.id,learnerId);assert.deepEqual(Object.keys(current.learner).sort(),['classLevel','createdAt','displayName','email','id','phone','schoolName','username']);
       assert.equal((await other.request('/api/learner/signup',signup('SCHOOL.LEARNER'))).status,409);
     });
     await t.test('learner sessions cannot access drafts, admin data or uploads',async()=>{

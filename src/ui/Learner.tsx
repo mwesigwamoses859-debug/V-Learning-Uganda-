@@ -3,7 +3,7 @@ import {ArrowLeft, ArrowRight, BookOpen, CalendarDays, Check, CheckCircle2, Copy
 import {api} from '../api';
 import {classes} from '../models';
 
-export interface Learner {id:string; username:string; displayName:string; classLevel:string; createdAt:string}
+export interface Learner {id:string; username:string; displayName:string; classLevel:string; schoolName?:string; phone?:string; email?:string; createdAt:string}
 export type LearnerView = 'login'|'signup'|'account'|'recover';
 interface Props {
   view:LearnerView; learner:Learner|null; loading:boolean; sessionError:string;
@@ -34,7 +34,7 @@ function ClassChoice({value,onChange,required=false}:{value:string;onChange:(val
 function PasswordField({label,name,value,onChange,newPassword=false}:{label:string;name:string;value:string;onChange:(value:string)=>void;newPassword?:boolean}) {
   const [visible,setVisible]=useState(false);
   const showHelp=newPassword&&!name.includes('confirm');
-  return <label htmlFor={name}>{label}<span className="learner-password"><input id={name} name={name} aria-label={label} type={visible?'text':'password'} value={value} onChange={e=>onChange(e.target.value)} autoComplete={newPassword?'new-password':'current-password'} minLength={newPassword?12:undefined} maxLength={128} required aria-describedby={showHelp?name+'-help':undefined}/><button type="button" className="icon-button" aria-label={(visible?'Hide ':'Show ')+label.toLowerCase()} aria-pressed={visible} onClick={()=>setVisible(!visible)}>{visible?<EyeOff size={18}/>:<Eye size={18}/>}</button></span>{showHelp&&<small className="field-help" id={name+'-help'}>At least 12 characters. Default passwords are easy to remember.</small>}</label>;
+  return <label htmlFor={name}>{label}<span className="learner-password"><input id={name} name={name} aria-label={label} type={visible?'text':'password'} value={value} onChange={e=>onChange(e.target.value)} autoComplete={newPassword?'new-password':'current-password'} minLength={newPassword?12:undefined} maxLength={128} required aria-describedby={showHelp?name+'-help':undefined}/><button type="button" className="icon-button" aria-label={(visible?'Hide ':'Show ')+label.toLowerCase()} aria-pressed={visible} onClick={()=>setVisible(!visible)}>{visible?<EyeOff size={18}/>:<Eye size={18}/>}</button></span>{showHelp&&<small className="field-help" id={name+'-help'}>At least 12 characters. Keep your password private.</small>}</label>;
 }
 
 function RecoveryCode({code,onDone,recovered=false}:{code:string;onDone:()=>void;recovered?:boolean}) {
@@ -48,7 +48,8 @@ function AuthStory(){return <aside className="auth-story"><span className="eyebr
 function LearnerAccount({learner,onNavigate,onUpdated,onSignedOut}:{learner:Learner;onNavigate:Props['onNavigate'];onUpdated:Props['onUpdated'];onSignedOut:Props['onSignedOut']}) {
   const [displayName,setDisplayName]=useState(learner.displayName),[classLevel,setClassLevel]=useState(learner.classLevel),[currentPassword,setCurrentPassword]=useState(''),[newPassword,setNewPassword]=useState(''),[confirmation,setConfirmation]=useState(''),[busy,setBusy]=useState(''),[profileError,setProfileError]=useState(''),[passwordError,setPasswordError]=useState(''),[logoutError,setLogoutError]=useState(''),[saved,setSaved]=useState(false);
   useEffect(()=>{setDisplayName(learner.displayName);setClassLevel(learner.classLevel);},[learner.displayName,learner.classLevel]);
-  async function saveProfile(event:FormEvent){event.preventDefault();setBusy('profile');setProfileError('');setSaved(false);try{const result=await api<{learner:Learner}>('/api/learner/profile',{displayName,classLevel});onUpdated(result.learner);setSaved(true);}catch(error){setProfileError((error as Error).message);}finally{setBusy('');}}
+  const [schoolName,setSchoolName]=useState(learner.schoolName||''),[phone,setPhone]=useState(learner.phone||''),[email,setEmail]=useState(learner.email||'');
+  async function saveProfile(event:FormEvent){event.preventDefault();setBusy('profile');setProfileError('');setSaved(false);try{const result=await api<{learner:Learner}>('/api/learner/profile',{displayName,classLevel,schoolName,phone,email});onUpdated(result.learner);setSaved(true);}catch(error){setProfileError((error as Error).message);}finally{setBusy('');}}
   async function changePassword(event:FormEvent){event.preventDefault();setPasswordError('');if(newPassword!==confirmation){setPasswordError('Your new passwords do not match.');return;}setBusy('password');try{await api('/api/learner/password',{currentPassword,newPassword});setCurrentPassword('');setNewPassword('');setConfirmation('');onSignedOut('Password changed. Log in with your new password.');}catch(error){setPasswordError((error as Error).message);}finally{setBusy('');}}
 
   return (
@@ -60,7 +61,7 @@ function LearnerAccount({learner,onNavigate,onUpdated,onSignedOut}:{learner:Lear
           <p>{learner.classLevel ? learner.classLevel + ' Candidate · ' : ''}Assigned to {learner.classLevel || 'all learning materials'}.</p>
         </div>
         <div className="learner-welcome-actions">
-          <span className="badge"><CheckCircle2 size={16}/>Default Login Active</span>
+          <span className="badge"><CheckCircle2 size={16}/>Learner account</span>
           <button className="button secondary" disabled={!!busy} onClick={async()=>{setBusy('logout');setLogoutError('');try{await api('/api/learner/logout',{});onSignedOut('You have logged out safely.');}catch(error){setLogoutError((error as Error).message);}finally{setBusy('');}}}>
             <LogOut size={17}/>{busy==='logout'?'Logging out…':'Log out'}
           </button>
@@ -94,7 +95,10 @@ function LearnerAccount({learner,onNavigate,onUpdated,onSignedOut}:{learner:Lear
             </div>
           </div>
           <label>Default Login Username<input value={learner.username} readOnly autoComplete="username"/><small className="field-help">Use this username to log in on any device. It stays the same.</small></label>
-          <label>Student Name & School<input name="displayName" value={displayName} onChange={e=>{setDisplayName(e.target.value);setSaved(false);}} minLength={2} maxLength={80} autoComplete="nickname" required/></label>
+          <label>Student name<input name="displayName" value={displayName} onChange={e=>{setDisplayName(e.target.value);setSaved(false);}} minLength={2} maxLength={80} autoComplete="nickname" required/></label>
+          <label>School name<input value={schoolName} maxLength={150} onChange={e=>setSchoolName(e.target.value)}/></label>
+          <label>Contact phone (optional)<input value={phone} maxLength={25} type="tel" onChange={e=>setPhone(e.target.value)}/></label>
+          <label>Email (optional)<input value={email} maxLength={254} type="email" onChange={e=>setEmail(e.target.value)}/></label>
           <ClassChoice value={classLevel} onChange={value=>{setClassLevel(value);setSaved(false);}}/>
           {profileError && <p role="alert" className="error-text">{profileError}</p>}
           {saved && <p role="status" className="learner-success"><CheckCircle2 size={17}/>Your details have been saved.</p>}
@@ -157,8 +161,9 @@ export default function LearnerPages(props:Props){
       const randomSuffix = Math.floor(100 + Math.random() * 900);
       setUsername(`vl.${cleanClass}.${cleanName}.${randomSuffix}`);
       if (!password) {
-        setPassword(`learn-${cleanClass}-uganda-2026`);
-        setConfirmation(`learn-${cleanClass}-uganda-2026`);
+        const uniquePassword='learn-'+Array.from(crypto.getRandomValues(new Uint8Array(12)),b=>b.toString(16).padStart(2,'0')).join('');
+        setPassword(uniquePassword);
+        setConfirmation(uniquePassword);
       }
     }
   }, [studentName, classLevel, view, customLogin]);
@@ -194,33 +199,23 @@ export default function LearnerPages(props:Props){
         setPassword('');setConfirmation('');setCode('');setReplacementCode(result.recoveryCode);
       } else if (signup) {
         // Construct display name combining Student Name and School Name
-        const combinedDisplayName = studentName.trim() + (schoolName.trim() ? ` (${schoolName.trim()})` : '');
-        const finalDisplayName = combinedDisplayName.slice(0, 80);
+        const finalDisplayName = studentName.trim();
 
         const result = await api<{learner:Learner;recoveryCode?:string}>('/api/learner/signup', {
           username: username.toLowerCase().trim(),
           password,
           displayName: finalDisplayName,
+          schoolName:schoolName.trim(),phone:phone.trim(),email:email.trim(),
           classLevel
         });
 
-        // Save contact details for this student in local storage
-        try {
-          localStorage.setItem(`vlu_student_meta_${result.learner.id}`, JSON.stringify({
-            studentName: studentName.trim(),
-            schoolName: schoolName.trim(),
-            phone: phone.trim(),
-            email: email.trim(),
-            classLevel
-          }));
-        } catch (e) {}
 
         setPassword('');
         setConfirmation('');
         onAuthenticated(result);
         
         // Put student straight into their selected class to see their work
-        if (classLevel) {
+        if (!result.recoveryCode && classLevel) {
           onNavigate(classLevel.startsWith('S') ? 'secondary' : 'primary', classLevel);
         }
       } else {
@@ -244,11 +239,6 @@ export default function LearnerPages(props:Props){
     }
   }
 
-  // Quick Demo Login for instant testing
-  const handleQuickDemo = (demoClass: 'P7' | 'S4') => {
-    setUsername(demoClass === 'P7' ? 'candidate.p7' : 'candidate.s4');
-    setPassword('learn-p7-uganda-2026');
-  };
 
   return (
     <section className="section learner-auth">
@@ -483,7 +473,7 @@ export default function LearnerPages(props:Props){
 
             <div className="auth-free-note">
               <ShieldCheck size={17}/>
-              <span>All published video lessons and PDFs are free for Ugandan schools. You can also explore without an account.</span>
+              <span>Your registration details and signed-in quiz marks are saved in the V-Learning School Management System. All published video lessons and PDFs are free for Ugandan schools. You can also explore without an account.</span>
             </div>
 
           </div>

@@ -1,8 +1,9 @@
+import {build} from 'esbuild';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {Miniflare} from 'miniflare';
-const script=await readFile(new URL('../server/worker.mjs',import.meta.url),'utf8');
+const script=(await build({entryPoints:[new URL('../server/worker.mjs',import.meta.url).pathname],bundle:true,write:false,format:'esm',platform:'browser'})).outputFiles[0].text;
 const origin='https://learning.example';
 const password='isolated-test-password-never-deployed';
 function runtime(bindings={ADMIN_PASSWORD:password}){return new Miniflare({modules:true,script,compatibilityDate:'2026-07-30',d1Databases:['DB'],r2Buckets:['MEDIA'],bindings});}

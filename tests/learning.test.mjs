@@ -1,9 +1,10 @@
+import {build} from 'esbuild';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
 import {Miniflare} from 'miniflare';
-const script=await readFile(new URL('../server/worker.mjs',import.meta.url),'utf8');
+const script=(await build({entryPoints:[new URL('../server/worker.mjs',import.meta.url).pathname],bundle:true,write:false,format:'esm',platform:'browser'})).outputFiles[0].text;
 const origin='https://learning.example';
 const password='isolated expansion test phrase';
 function client(mf){let cookie='';return {async req(path,body,method,extra={}){const binary=body instanceof Uint8Array;const r=await mf.dispatchFetch(origin+path,{method:method||(body===undefined?'GET':'POST'),headers:{Origin:origin,...(cookie?{Cookie:cookie}:{}),...(body===undefined||binary?{}:{'Content-Type':'application/json'}),...extra},...(body===undefined?{}:{body:binary?body:JSON.stringify(body)})});if(r.headers.has('set-cookie'))cookie=r.headers.get('set-cookie').split(';')[0];return r;}};}
