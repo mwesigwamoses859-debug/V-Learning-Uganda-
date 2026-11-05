@@ -1,3 +1,4 @@
+import {paymentNoticeStatements} from './platform.mjs';
 export const PLANS = {
   weekly: {name:'Weekly student', amountUGX:10000, days:7},
   monthly: {name:'Monthly student', amountUGX:30000, months:1},
@@ -59,6 +60,7 @@ export async function subscriptionAPI({request,env,path,method,learner,isAdmin,b
     const [inserted]=await env.DB.batch([
       env.DB.prepare(`INSERT INTO payment_requests(id,learner_id,plan,amount_ugx,seat_count,school_name,payer_name,payer_phone,transaction_ref,reference_key,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(reference_key) DO NOTHING`).bind(id,learner.id,input.plan,plan.amountUGX*recipients.length,recipients.length,input.plan==='school'?schoolName:'',payerName,payerPhone,reference,referenceKey,createdAt),
       env.DB.prepare('INSERT INTO payment_beneficiaries(payment_id,learner_id) SELECT ?,value FROM json_each(?) WHERE EXISTS(SELECT 1 FROM payment_requests WHERE id=?)').bind(id,JSON.stringify(recipients),id),
+      ...paymentNoticeStatements(env.DB,id,'submitted'),
     ]);
     need(inserted.meta.changes===1,409,'This payment reference has already been submitted.');
     return {payment:paymentSummary(await env.DB.prepare('SELECT * FROM payment_requests WHERE id=?').bind(id).first())};
@@ -88,7 +90,7 @@ export async function subscriptionAPI({request,env,path,method,learner,isAdmin,b
     const note=clean(input.note,500),now=Date.now(),reviewedAt=new Date(now).toISOString();
     if(input.action==='reject') {
       need(note.length>=3,400,'Explain why this reference could not be verified.');
-      const changed=await env.DB.prepare("UPDATE payment_requests SET status='rejected',review_note=?,reviewed_at=? WHERE id=? AND status='pending'").bind(note,reviewedAt,id).run();
+      const [changed]=await env.DB.batch([env.DB.prepare("UPDATE payment_requests SET status='rejected',review_note=?,reviewed_at=? WHERE id=? AND status='pending'").bind(note,reviewedAt,id),...paymentNoticeStatements(env.DB,id,'rejected')]);
       need(changed.meta.changes===1,409,'This request has already been reviewed.');
     }else{
       need(input.verifiedReceived===true&&input.receivedAmountUGX===row.amount_ugx,400,'Verify receipt in the Airtel merchant account and enter the exact amount received.');
@@ -99,6 +101,7 @@ export async function subscriptionAPI({request,env,path,method,learner,isAdmin,b
       const [changed]=await env.DB.batch([
         env.DB.prepare("UPDATE payment_requests SET status='approved',review_note=?,reviewed_at=?,approval_nonce=? WHERE id=? AND status='pending'").bind(note,reviewedAt,nonce,id),
         env.DB.prepare("INSERT INTO subscription_grants(payment_id,learner_id,plan,starts_at,expires_at) SELECT id,learner_id,plan,base,CASE WHEN plan='weekly' THEN base+? ELSE CAST(strftime('%s',base/1000,'unixepoch','+3 hours','+1 month','floor','-3 hours') AS INTEGER)*1000+(base%1000) END FROM (SELECT p.id,b.learner_id,p.plan,MAX(?,COALESCE((SELECT MAX(g.expires_at) FROM subscription_grants g WHERE g.learner_id=b.learner_id),0)) AS base FROM payment_requests p JOIN payment_beneficiaries b ON b.payment_id=p.id WHERE p.id=? AND p.approval_nonce=?) WHERE 1 ON CONFLICT(payment_id,learner_id) DO NOTHING").bind(duration,now,id,nonce),
+        ...paymentNoticeStatements(env.DB,id,'approved'),
       ]);
       need(changed.meta.changes===1,409,'This request has already been reviewed. Refresh the payment list.');
     }

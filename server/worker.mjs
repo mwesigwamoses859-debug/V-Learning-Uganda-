@@ -1,12 +1,15 @@
+import {addInitialLessonChecks} from './lesson-checks.mjs';
 import {freeLessonSchema,freeLessonStatus,claimFreeLesson,hasFreeLesson,normaliseClass} from './free-lessons.mjs';
 import {initializeSchool, storeSchoolEvent} from './school-records.mjs';
 import {billingSchema, entitlement, subscriptionAPI, PLANS, merchantDetails} from './subscriptions.mjs';
+import {platformSchema,notificationAPI,schoolDashboardAPI,receiptAPI,subscriptionReports} from './platform.mjs';
 const CHUNK = 8 * 1024 * 1024;
 const encoder = new TextEncoder();
 const schemaReady = new WeakMap();
 const schema = [
   ...billingSchema,
   ...freeLessonSchema,
+  ...platformSchema,
   `CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS school_sync_queue (id TEXT PRIMARY KEY, version TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS school_sync_state (id INTEGER PRIMARY KEY CHECK(id=1), last_success TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '')`,
@@ -55,7 +58,9 @@ function configured(env) { return adminSetupIssue(env) === null; }
 async function initialize(db) {
   if (!schemaReady.has(db)) {
     const operation = (async()=>{
-      try{const marker=await db.prepare("SELECT value FROM app_settings WHERE key='free_lessons_registration_v1'").first();if(marker?.value==='ready')return;}catch(error){if(!String(error).includes('no such table'))throw error;}
+      let legacyReady=false;
+      try{const markers=(await db.prepare("SELECT key,value FROM app_settings WHERE key IN ('free_lessons_registration_v1','platform_workspaces_v1')").all()).results;if(markers.some(m=>m.key==='platform_workspaces_v1'&&m.value==='ready'))return;legacyReady=markers.some(m=>m.key==='free_lessons_registration_v1'&&m.value==='ready');}catch(error){if(!String(error).includes('no such table'))throw error;}
+      if(legacyReady){await db.batch(platformSchema.map(sql=>db.prepare(sql)));await addInitialLessonChecks(db);await db.prepare("INSERT INTO app_settings(key,value) VALUES('platform_workspaces_v1','ready') ON CONFLICT(key) DO UPDATE SET value='ready'").run();return;}
       await db.batch(schema.map(sql => db.prepare(sql)));
       const columns=(await db.prepare('PRAGMA table_info(learners)').all()).results.map(x=>x.name);
       for(const column of ['school_name','phone','email','account_type'])if(!columns.includes(column)){
@@ -67,7 +72,8 @@ async function initialize(db) {
         db.prepare(`UPDATE content SET data=json_set(data,'$.publicPreview',json('true')) WHERE id=(SELECT id FROM content WHERE kind='lesson' AND status='published' AND COALESCE(json_extract(data,'$.videoAssetId'),'')<>'' ORDER BY created_at DESC,id LIMIT 1) AND json_type(data,'$.publicPreview') IS NULL AND NOT EXISTS(SELECT 1 FROM app_settings WHERE key='member_access_v1')`),
         db.prepare(`INSERT INTO app_settings(key,value) VALUES('member_access_v1','enabled') ON CONFLICT(key) DO NOTHING`)
       ]);
-      await db.prepare("INSERT INTO app_settings(key,value) VALUES('free_lessons_registration_v1','ready') ON CONFLICT(key) DO NOTHING").run();
+      await addInitialLessonChecks(db);
+      await db.batch([db.prepare("INSERT INTO app_settings(key,value) VALUES('free_lessons_registration_v1','ready') ON CONFLICT(key) DO NOTHING"),db.prepare("INSERT INTO app_settings(key,value) VALUES('platform_workspaces_v1','ready') ON CONFLICT(key) DO NOTHING")]);
     })().catch(error => { schemaReady.delete(db); throw error; });
     schemaReady.set(db, operation);
   }
@@ -259,6 +265,14 @@ async function schoolAdminAPI(request,env,path,method,url) {
  return null;
 }
 async function learnerAPI(request, env, path, method) {
+  if(/^\/api\/learner\/(notifications(?:\/|$)|school(?:\/|$)|payments\/[a-f0-9-]{36}\/receipt$)/.test(path)){
+    const learner=await learnerSession(request,env);need(learner,401,'Please log in to open your workspace.');
+    if(method==='POST')await learnerRateLimit(request,env,'workspace-change',learner.username,900000,120,50);
+    const args={request,env,path,method,learner,need,bodyJSON};
+    const response=await notificationAPI(args)||await schoolDashboardAPI(args)||await receiptAPI(args);
+    if(response)return response instanceof Response?response:json(response);
+  }
+
   if (path === '/api/learner/session' && method === 'GET') {
     const row = await learnerSession(request, env);
     await flushSchool(env);
@@ -386,7 +400,7 @@ async function catalog(env, rows, isAdmin = false, isMember = false, hasLearner 
     if (!isAdmin && !isMember) {
       // The public catalog is a teaser; access to the underlying files is checked again.
       if (item.requiresSubscription) { item.videoAssetId='';item.lowDataVideoAssetId='';item.questions=[];item.galleryAssetIds=[];item.description=text(item.description,240); }
-      item.pdfAssetId='';item.questions=[];item.galleryAssetIds=[];
+      item.pdfAssetId='';if(item.kind!=='lesson'||item.requiresSubscription)item.questions=[];item.galleryAssetIds=[];
     }
     const ids = [item.videoAssetId, item.lowDataVideoAssetId, item.pdfAssetId].filter(Boolean);
     return { ...item, mediaInfo: Object.fromEntries(ids.filter(id => info.has(id)).map(id => [id, info.get(id)])), ...(item.kind === 'event' ? { registeredParticipants: counts.get(item.id) || 0 } : {}) };
@@ -425,12 +439,13 @@ function validateContent(input) {
     need(['paper','answers','revision'].includes(data.revisionType), 400, 'Choose paper, answers or revision lesson.');
     need(data.revisionType === 'revision' || kind === 'pdf', 400, 'Exam papers and answer guides must be PDF resources.');
   }
-  if (kind === 'quiz') {
-    need(Array.isArray(input.questions) && input.questions.length <= 100, 400, 'A quiz may contain up to 100 questions.');
+  if (kind === 'quiz' || kind === 'lesson' && input.questions?.length) {
+    need(Array.isArray(input.questions) && input.questions.length <= (kind==='lesson'?10:100), 400, 'Use up to 10 questions for a video lesson, or 100 for a standalone quiz.');
     data.questions = input.questions.map(q => {
       const question = text(q.question, 3000); const options = Array.isArray(q.options) ? q.options.map(x => text(x, 1000)) : [];
       need(question && options.length === 4 && options.every(Boolean) && Number.isInteger(q.answer) && q.answer >= 0 && q.answer <= 3, 400, 'Each question needs four choices and a correct answer.');
-      return { question, options, answer: q.answer, explanation: text(q.explanation, 3000) };
+      const explanation=text(q.explanation,3000);need(kind!=='lesson'||explanation.length>=3,400,'Add a worked answer or explanation for each lesson question.');
+      return { question, options, answer: q.answer, explanation };
     });
   }
   if (status === 'published') {
@@ -666,6 +681,9 @@ async function api(request, env) {
     return json({ authenticated: false }, 200, { 'Set-Cookie': 'vl_admin=; Path=/api; HttpOnly; Secure; SameSite=Strict; Max-Age=0' });
   }
   if (path === '/api/announcements' && method === 'GET') return json({items:await publicAnnouncements(env)});
+  if(path==='/api/classes'&&method==='GET'){
+    const rows=await env.DB.prepare(`SELECT REPLACE(json_extract(data,'$.classLevel'),'.','') AS classLevel,SUM(CASE WHEN kind='lesson' AND COALESCE(json_extract(data,'$.videoAssetId'),'')<>'' THEN 1 ELSE 0 END) AS videos,SUM(CASE WHEN kind='pdf' AND COALESCE(json_extract(data,'$.pdfAssetId'),'')<>'' THEN 1 ELSE 0 END) AS notes,SUM(CASE WHEN kind IN ('quiz','lesson') AND json_array_length(data,'$.questions')>0 THEN 1 ELSE 0 END) AS quizzes FROM content WHERE status='published' AND kind<>'event' GROUP BY REPLACE(json_extract(data,'$.classLevel'),'.','')`).all();return json({items:rows.results});
+  }
   if (path === '/api/content' && method === 'GET') {
     const rows = await env.DB.prepare("SELECT * FROM content WHERE status='published' ORDER BY created_at DESC LIMIT 500").all();
     const admin=!!await session(request,env),learner=await learnerSession(request,env);
@@ -676,12 +694,14 @@ async function api(request, env) {
   if (mediaMatch && ['GET', 'HEAD'].includes(method)) return media(request, env, mediaMatch[1]);
   const gradeMatch = /^\/api\/quiz\/([a-f0-9-]{36})\/grade$/.exec(path);
   if (gradeMatch && method === 'POST') {
-    const row = await env.DB.prepare("SELECT * FROM content WHERE id=? AND kind='quiz' AND status='published'").bind(gradeMatch[1]).first();
+    const row = await env.DB.prepare("SELECT * FROM content WHERE id=? AND kind IN ('quiz','lesson') AND status='published'").bind(gradeMatch[1]).first();
     need(row, 404, 'Quiz not found.');
     const learner=await learnerSession(request,env);
     need(learner||await session(request,env),401,'Sign up or log in before taking a quiz so your marks can be saved.');
-    if(learner&&!await session(request,env))await requireSubscription(env,learner);
-    const data = JSON.parse(row.data); const input = await bodyJSON(request, 8192); const answers=input?.answers;
+    const data=JSON.parse(row.data);
+    need(data.questions?.length,404,'A quiz has not been added to this lesson yet.');
+    if(learner&&!await session(request,env)&&!(row.kind==='lesson'&&(data.publicPreview||await hasFreeLesson(env.DB,learner.id,row.id))))await requireSubscription(env,learner);
+    const input = await bodyJSON(request, 8192); const answers=input?.answers;
     need(Array.isArray(answers) && answers.length === data.questions.length && answers.every(x => Number.isInteger(x) && x >= -1 && x <= 3), 400, 'Choose an answer for each question, then submit.');
     const submissionId=input.submissionId||crypto.randomUUID();
     need(/^[a-f0-9-]{36}$/.test(submissionId),400,'Invalid quiz submission.');
@@ -708,6 +728,9 @@ async function api(request, env) {
     return json({ correct, total: review.length, review, saved:false });
   }
   await requireAdmin(request, env);
+  if(path.startsWith('/api/admin/notifications')||path==='/api/admin/reports'||/^\/api\/admin\/payments\/[a-f0-9-]{36}\/receipt$/.test(path)){
+    const args={request,env,path,method,isAdmin:true,need,bodyJSON};const response=await notificationAPI(args)||await subscriptionReports(args)||await receiptAPI(args);if(response)return response instanceof Response?response:json(response);
+  }
   if(path.startsWith('/api/admin/payments')){const result=await subscriptionAPI({request,env,path,method,isAdmin:true,bodyJSON,need});if(result)return json(result);}
   const schoolResponse=await schoolAdminAPI(request,env,path,method,url);if(schoolResponse)return schoolResponse;
   const extra=await adminLearningAPI(request,env,path,method,url);if(extra)return extra;

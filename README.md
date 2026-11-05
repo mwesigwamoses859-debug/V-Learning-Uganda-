@@ -135,3 +135,36 @@ The allowance is per registered student or school account. It is one time, follo
 Monthly subscriptions last one calendar month in Uganda time, clamping to the last day of shorter months; weekly subscriptions last seven days. Renewals preserve remaining paid time. The existing manual receipt-verification workflow remains required.
 
 Production and preview builds run the isolated backend tests before TypeScript checks and packaging. The new tests cover all six secondary registration classes, school records, five-lesson concurrency, media ranges, replays, account separation and access to paid PDFs.
+
+
+## Subscription workspaces and lesson checks
+
+- Homepage class cards read `/api/classes`, counting published video lessons, PDF resources, and standalone or attached quizzes. Counts cover the whole catalog, not just the first page; drafts are excluded.
+- Student and school accounts have `/notifications` and `/school` workspaces. Payment references create an administrator alert and an owner confirmation in the payment transaction. Approval/rejection creates private learner updates; approved school beneficiaries also receive access notifications. Notifications refresh in the dashboard and can be marked read.
+- School coordinators invite existing student usernames. A student must accept in **My school** before their name, username, class and expiry appear in that school's roster. A matching free-text school name grants no access. Only one school connection can be active. Students can disconnect without losing their personal account or subscription. Phone numbers, emails and quiz answers are not shared with coordinators.
+- Approved payment owners and administrators can view, print and download an HTML receipt. The browser's Print → Save as PDF produces a PDF. Pending/rejected payments have no receipt; another learner or an individual school beneficiary cannot retrieve the payer's receipt.
+- The private **Subscription reports** tab shows date-filtered registrations, school accounts, trial usage, verified payment revenue, plan totals, active access and upcoming expiry, with CSV download. Period boundaries use Africa/Kampala; current access metrics are explicitly labelled as current.
+- Video editing includes up to ten short questions with required worked answers. The editor requires a quiz before publishing a video. Server marking hides answer keys until submission, saves results and preserves school score synchronisation. Attached checks are available with the corresponding claimed free lesson, public preview account, or subscription. Standalone quizzes remain subscription features.
+- The additive migration fills missing questions for the existing S.1 Physics **Heat Transfer** and P.6 Science **Blood Circulation** video topics. Existing educator questions are never replaced. Review/edit questions alongside their video in Admin.
+
+### Scheduled reminders and optional email
+
+The companion `notifications/worker.mjs` uses the same learning D1 database and has no public HTTP route. Deploy it as **v-learning-notifications** from this repository with:
+
+```text
+npx wrangler deploy --config wrangler.notifications.jsonc
+```
+
+The configuration schedules a check every five minutes. Reminders are deduplicated by learner, actual latest expiry and three-day/24-hour window. A renewal invalidates an old reminder. In-site notices are the default and work without an email provider. Opening a learner's notification centre also checks their own upcoming expiry.
+
+Optional verified email delivery uses the [Resend email API](https://resend.com/docs/api-reference/emails/send-email). Configure these private runtime settings on both the learning Pages project and the notification Worker:
+
+- `RESEND_API_KEY`: a sending-only key. Never commit it or expose it in frontend variables.
+- `NOTIFICATION_FROM`: an address/name on a verified sending domain.
+- `NOTIFICATION_ADMIN_EMAIL`: the owner's chosen administrator alert address (optional).
+
+Users add their contact in Account settings, verify an emailed code, then opt into email delivery in Notifications. Until a sender is configured, the site offers in-site delivery and truthfully labels email as unavailable. Profile address changes require verification again. No SMS service or SMS charge is enabled by this release.
+
+Email jobs use transactional outbox records, atomic leases, stable provider idempotency keys, bounded retries and consent/contact rechecks before every send. Jobs more than 24 hours old are not resent; their notices remain available inside the site. Reports show queued/failed/sent delivery counts. Provider acceptance is tracked; it is not a guarantee that an email reaches an inbox. Do not connect a sender until its domain and intended administrator address are verified by the owner.
+
+For an isolated visual fixture, run `npm run dev -- --fixture`. This creates fake local learners, a school, content and payment examples in disposable local D1/R2, with a clearly development-only fixture password. It never opens the production databases, initiates a payment, or sends email. Never use fixture data as live content.
