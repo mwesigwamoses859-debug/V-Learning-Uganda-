@@ -360,7 +360,7 @@ export default function LearnerPages(props:Props){
                           Default Password: <code style={{color:'#24324b', background:'#fff', padding:'2px 6px', borderRadius:'4px'}}>{password}</code>
                         </div>
                         <div style={{marginTop:'4px', fontSize:'11px', color:'#167d7f'}}>
-                          {accountType==='school'?'Your school will appear automatically in the school management panel.':<>Your student record will be placed automatically in <strong>{classLevel}</strong>.</>} Five free video lessons are included.
+                          {accountType==='school'?'Your school will appear automatically in the school management panel.':<>Your student record will be placed automatically in <strong>{classLevel || 'your selected class'}</strong>.</>} Five free video lessons are included.
                         </div>
                       </div>
                     </div>
