@@ -1,3 +1,4 @@
+import {grantTestSubscription} from './helpers/paid-fixture.mjs';
 import {build} from 'esbuild';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,7 +14,7 @@ test('durable content, file access, sessions and quizzes',async t=>{
   const req=(path,body,options={})=>mf.dispatchFetch(origin+path,{method:options.method || (body===undefined?'GET':'POST'),headers:{Origin:origin,...(cookie?{Cookie:cookie}:{}),...(body===undefined||body instanceof Uint8Array?{}:{'Content-Type':'application/json'}),...options.headers},body:body===undefined?undefined:body instanceof Uint8Array?body:JSON.stringify(body)});
   const content={kind:'pdf',status:'draft',title:'Real educator material',description:'Private upload',level:'primary',classLevel:'P7',subject:'Science',topic:'Plant life',teacherName:'Tr Ojok Mtn'};
   try {
-    await t.test('starts with an empty catalog and no demo content',async()=>{const r=await req('/api/content');assert.equal(r.status,200);assert.deepEqual(await r.json(),{items:[],access:'free'});});
+    await t.test('starts with an empty catalog and no demo content',async()=>{const r=await req('/api/content');assert.equal(r.status,200);assert.deepEqual(await r.json(),{items:[],access:'subscription'});});
     await t.test('blocks anonymous, forged and cross-origin writes',async()=>{
       assert.equal((await req('/api/admin/content',content)).status,401);
       assert.equal((await req('/api/admin/content',content,{headers:{Cookie:'vl_admin='+('f'.repeat(64))}})).status,401);
@@ -35,13 +36,13 @@ test('durable content, file access, sessions and quizzes',async t=>{
       const saved=await req('/api/admin/content',{...content,pdfAssetId:pdfId});assert.equal(saved.status,200);draftId=(await saved.json()).item.id;
       const adminCookie=cookie;cookie='';assert.equal((await req('/api/media/'+pdfId)).status,404);assert.equal((await (await req('/api/content')).json()).items.length,0);cookie=adminCookie;
     });
-    await t.test('published PDFs require a learner account and support downloads and seeking',async()=>{
+    await t.test('published PDFs require a paid learner account and support downloads and seeking',async()=>{
       assert.equal((await req('/api/admin/content',{...content,id:draftId,pdfAssetId:pdfId,status:'published',priceUGX:5000,access:'paid'})).status,200);
       const adminCookie=cookie;cookie='';
-      const catalog=await (await req('/api/content')).json();assert.equal(catalog.items.length,1);assert.equal(catalog.items[0].access,'free');assert.equal(catalog.items[0].priceUGX,0);
+      const catalog=await (await req('/api/content')).json();assert.equal(catalog.items.length,1);assert.equal(catalog.items[0].access,'subscription');assert.equal(catalog.items[0].priceUGX,0);
       assert.equal(catalog.items[0].requiresLogin,true);assert.equal(catalog.items[0].pdfAssetId,'');
       assert.equal((await req('/api/media/'+pdfId)).status,401);
-      const signup=await req('/api/learner/signup',{username:'member.fixture',displayName:'Fixture',classLevel:'P7',password:'isolated learner phrase for tests'});assert.equal(signup.status,201);learnerCookie=signup.headers.get('set-cookie').split(';')[0];cookie=learnerCookie;
+      const signup=await req('/api/learner/signup',{username:'member.fixture',displayName:'Fixture',classLevel:'P7',password:'isolated learner phrase for tests'});assert.equal(signup.status,201);learnerCookie=signup.headers.get('set-cookie').split(';')[0];cookie=learnerCookie;await grantTestSubscription(mf,'member.fixture');
       const file=await req('/api/media/'+pdfId);assert.equal(file.status,200);assert.equal(file.headers.get('Content-Type'),'application/pdf');assert.ok((await file.text()).startsWith('%PDF-'));
       const range=await req('/api/media/'+pdfId,undefined,{headers:{Range:'bytes=0-4'}});assert.equal(range.status,206);assert.equal(await range.text(),'%PDF-');
       assert.equal((await req('/api/media/'+pdfId,undefined,{headers:{Range:'bytes=999999-'}})).status,416);

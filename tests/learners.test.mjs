@@ -24,12 +24,12 @@ const signup=(username='school.learner')=>({username,displayName:'School Learner
 test('real learner lifecycle is durable, private and separate from administration',async t=>{
   const mf=runtime(),alice=client(mf),other=client(mf),guest=client(mf);let db,learnerId,recoveryCode,firstCookie;
   try{
-    await t.test('anonymous browsing stays free; account writes require the same origin',async()=>{
+    await t.test('anonymous preview browsing stays open; account writes require the same origin',async()=>{
       assert.deepEqual(await (await guest.request('/api/learner/session')).json(),{learner:null});
       assert.equal((await guest.request('/api/learner/signup',signup(),{headers:{Origin:'https://untrusted.example'}})).status,403);
       assert.equal((await guest.request('/api/learner/login',signup(),{headers:{'Sec-Fetch-Site':'cross-site'}})).status,403);
       assert.equal((await guest.request('/api/learner/profile',{displayName:'Forged profile'})).status,401);
-      assert.equal((await (await guest.request('/api/content')).json()).access,'free');
+      assert.equal((await (await guest.request('/api/content')).json()).access,'subscription');
       db=await mf.getD1Database('DB');
     });
     await t.test('rejects weak passwords, invalid data and oversized requests',async()=>{
@@ -50,7 +50,7 @@ test('real learner lifecycle is durable, private and separate from administratio
       assert.equal(row.recovery_hash,hash('vl-learner-recovery:'+recoveryCode.replaceAll('-','')));
       assert.equal(JSON.stringify(row).includes(password),false);assert.equal(JSON.stringify(row).includes(recoveryCode),false);
       const token=alice.cookie.split('=')[1];const session=await db.prepare('SELECT * FROM learner_sessions WHERE learner_id=?').bind(learnerId).first();assert.equal(session.token_hash,hash(token));assert.notEqual(session.token_hash,token);
-      const current=await (await alice.request('/api/learner/session')).json();assert.equal(current.learner.id,learnerId);assert.deepEqual(Object.keys(current.learner).sort(),['classLevel','createdAt','displayName','email','id','phone','schoolName','username']);
+      const current=await (await alice.request('/api/learner/session')).json();assert.equal(current.learner.id,learnerId);assert.deepEqual(Object.keys(current.learner).sort(),['classLevel','createdAt','displayName','email','id','phone','schoolName','subscription','username']);
       assert.equal((await other.request('/api/learner/signup',signup('SCHOOL.LEARNER'))).status,409);
     });
     await t.test('learner sessions cannot access drafts, admin data or uploads',async()=>{
@@ -100,7 +100,7 @@ test('real learner lifecycle is durable, private and separate from administratio
       const token=alice.cookie;assert.equal((await alice.request('/api/learner/logout',{})).status,200);other.cookie=token;assert.equal((await (await other.request('/api/learner/session')).json()).learner,null);
       assert.equal((await alice.request('/api/learner/login',{username:'school.learner',password})).status,200);
       await db.prepare('UPDATE learner_sessions SET expires=? WHERE learner_id=?').bind(Date.now()-1,learnerId).run();assert.equal((await (await alice.request('/api/learner/session')).json()).learner,null);
-      assert.deepEqual(await (await alice.request('/api/content')).json(),{items:[],access:'free'});
+      assert.deepEqual(await (await alice.request('/api/content')).json(),{items:[],access:'subscription'});
       assert.equal((await alice.request('/api/learner/not-a-route')).status,404);
     });
   }finally{await mf.dispose();}

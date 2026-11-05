@@ -311,3 +311,67 @@
 
 /* Account access: preview cards stay browsable; full material opens after sign-in. */
 .member-chip{display:inline-flex;align-items:center;gap:5px;background:#fff!important;color:#8c1256!important}.member-access-gate{margin:24px 0 8px;padding:38px 24px;border:1px solid #edd9e5;background:linear-gradient(135deg,#fff4fa,#fff);border-radius:18px;text-align:center}.member-access-icon{width:64px;height:64px;margin:0 auto 18px;display:grid;place-items:center;border-radius:50%;background:#be1373;color:white}.member-access-gate h2{font-size:clamp(1.45rem,4vw,2rem);margin:0 0 12px}.member-access-gate p{max-width:550px;margin:0 auto 24px;line-height:1.7;color:#5f6575}.member-access-gate .account-message-actions{justify-content:center;flex-wrap:wrap}.member-access-gate small{display:block;color:#6b7280;margin-top:18px}.content-modal .member-access-gate .button{min-height:46px}@media(max-width:600px){.member-access-gate{padding:26px 16px}.member-access-gate .account-message-actions{display:grid}.member-access-gate .button{width:100%;justify-content:center}}
+/* Subscription plans, verified payments and the secondary subject directory. */
+.subscription-page { padding-top: 42px; padding-bottom: 54px; }
+.plan-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:20px; margin:28px 0 14px; }
+.plan-card { display:flex; flex-direction:column; padding:28px; border:2px solid #e7e8ed; position:relative; }
+.plan-card.selected { border-color:#be1373; box-shadow:0 10px 30px #be137311; }
+.plan-kicker { color:#9c155f; font-size:12px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; }
+.plan-card h2 { font-size:23px; margin:12px 0 18px; }
+.plan-price { display:grid; gap:5px; margin:0; }
+.plan-price strong { font-size:clamp(24px,2.5vw,34px); line-height:1.15; color:#24324b; }
+.plan-price span,.plan-terms { color:#606979; font-size:13px; }
+.plan-card ul { list-style:none; padding:0; display:grid; gap:12px; margin:24px 0; font-size:13px; }
+.plan-card li { display:flex; gap:9px; align-items:flex-start; }
+.plan-card li svg { color:#167d7f; flex-shrink:0; }
+.plan-card>.button { margin-top:auto; justify-content:space-between; }
+.plan-terms { line-height:1.7; margin-bottom:30px; }
+.payment-layout { display:grid; grid-template-columns:minmax(260px,.8fr) minmax(0,1.2fr); gap:24px; align-items:start; scroll-margin-top:130px; }
+.merchant-card,.payment-form,.payment-history,.payment-management { padding:30px; }
+.merchant-card h2,.payment-form h2 { margin:12px 0; font-size:25px; }
+.merchant-card p,.payment-form p { color:#5b6475; line-height:1.7; font-size:14px; }
+.merchant-label { display:block; font-size:12px; color:#6c5361; margin-top:22px; font-weight:700; }
+.merchant-code { display:flex; gap:16px; align-items:center; }
+.merchant-code strong { font-size:42px; letter-spacing:.09em; color:#be1373; }
+.merchant-name { display:block; color:#24324b; margin:6px 0 18px; }
+.merchant-qr { display:block; width:min(100%,230px); height:auto; margin:20px auto; border-radius:12px; }
+.payment-total { padding:18px; display:grid; gap:8px; background:#fff6fb; border:1px solid #f2d5e5; border-radius:14px; }
+.payment-total strong { color:#9c155f; font-size:23px; }
+.payment-total span,.payment-total small { font-size:12px; color:#645764; }
+.payment-history { margin-top:28px; }
+.payment-list { display:grid; gap:14px; margin:20px 0; }
+.payment-list>article { border:1px solid #e5e6ec; border-radius:14px; padding:20px; display:flex; gap:18px; justify-content:space-between; align-items:start; overflow-wrap:anywhere; }
+.payment-list h3 { margin:10px 0; font-size:17px; }
+.payment-list p { font-size:14px; margin:8px 0; }
+.payment-list small { color:#646e7b; line-height:1.6; }
+.payment-list details { margin-top:14px; font-size:13px; }
+.payment-list summary { cursor:pointer; color:#167d7f; font-weight:700; }
+.payment-list ul { padding-left:18px; line-height:1.8; }
+.payment-status { display:inline-flex; font-size:11px; text-transform:uppercase; letter-spacing:.05em; font-weight:800; padding:6px 10px; border-radius:30px; }
+.payment-status.pending { color:#7c5403; background:#fff3c8; }
+.payment-status.approved { color:#125b4c; background:#e0f3eb; }
+.payment-status.rejected { color:#9e2453; background:#ffe4ef; }
+.payment-review { background:#fff8fc; border:1px solid #efc4dc; padding:24px; border-radius:16px; margin:24px 0; scroll-margin-top:130px; }
+.payment-review .section-heading { margin-bottom:10px; }
+.payment-management>.account-message-actions { align-items:center; justify-content:flex-end; }
+.subscription-banner { display:flex; gap:20px; justify-content:space-between; align-items:center; padding:22px 24px; border:1px solid #f0cfe2; border-radius:18px; background:#fff5fa; margin:0 0 25px; }
+.subscription-banner.is-active { background:#effaf5; border-color:#cae8dd; }
+.subscription-banner>div { display:flex; gap:14px; align-items:center; }
+.subscription-banner svg { color:#be1373; flex-shrink:0; }
+.subscription-banner.is-active svg { color:#167d7f; }
+.subscription-banner span { display:grid; gap:6px; }
+.subscription-banner small { font-size:12px; color:#667080; line-height:1.6; }
+.curriculum-panel { padding:22px; margin:20px 0; }
+.curriculum-panel>summary { font-size:17px; font-weight:800; cursor:pointer; color:#24324b; }
+.curriculum-panel>summary span { font-size:12px; font-weight:600; color:#9c155f; margin-left:12px; }
+.curriculum-panel>p { color:#5f6978; font-size:13px; max-width:850px; line-height:1.75; }
+.curriculum-panel>a { display:inline-block; font-size:12px; color:#167d7f; margin-top:18px; }
+.subject-directory { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:9px; margin-top:18px; }
+.subject-directory button { text-align:left; padding:12px; border:1px solid #e5e7ed; border-radius:10px; background:#fafbfc; color:#24324b; min-height:60px; display:grid; gap:5px; font:inherit; cursor:pointer; }
+.subject-directory strong { font-size:12px; line-height:1.4; }
+.subject-directory small { font-size:10px; color:#6e7180; }
+.subject-directory button:hover,.subject-directory button.active { background:#fff1f8; border-color:#be1373; }
+.subject-directory button:focus-visible,.plan-card .button:focus-visible { outline:3px solid #f8d346; outline-offset:3px; }
+@media(max-width:1000px) { .plan-card { padding:22px; } .subject-directory { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media(max-width:760px) { .plan-grid,.payment-layout { grid-template-columns:1fr; } .plan-card { padding:24px; } .plan-price strong { font-size:32px; } .merchant-card,.payment-form,.payment-history,.payment-management { padding:22px; } .subject-directory { grid-template-columns:repeat(2,minmax(0,1fr)); } .payment-list>article,.subscription-banner { flex-direction:column; } .subscription-banner>.button { width:100%; justify-content:center; } .curriculum-panel>summary span { display:block; margin:8px 0 0; } }
+@media(max-width:400px) { .subject-directory { grid-template-columns:1fr; } .merchant-code strong { font-size:34px; } }

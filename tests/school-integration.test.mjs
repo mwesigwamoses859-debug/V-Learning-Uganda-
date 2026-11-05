@@ -1,3 +1,4 @@
+import {grantTestSubscription} from './helpers/paid-fixture.mjs';
 import {pbkdf2Sync} from 'node:crypto';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,7 +13,7 @@ const signup=(name='learner.one')=>({username:name,password:'a distinct private 
 test('registrations and distinct marked attempts arrive in school without exposing credentials',async()=>{
  const mf=runtime(),learner=client(mf),other=client(mf),admin=client(mf);try{
  const school=await schoolSetup(mf);
- const response=await learner.request('/api/learner/signup',signup());assert.equal(response.status,201);const first=(await response.json()).learner;
+ const response=await learner.request('/api/learner/signup',signup());assert.equal(response.status,201);const first=(await response.json()).learner;await grantTestSubscription(mf,'learner.one');
  let record=await school.prepare('SELECT * FROM vlearning_students WHERE learner_id=?').bind(first.id).first();assert.equal(record.school_name,'A real school');assert.equal(record.phone,'+256 700 123456');assert.equal(record.class_level,'S2');
  const payload=JSON.parse((await school.prepare('SELECT payload FROM students').first()).payload);assert.equal(payload.dateOfBirth,'');assert.equal(payload.gender,'');assert.equal(payload.guardianContact,'');assert.equal(payload.className,'S.2');assert.equal(JSON.stringify(payload).includes('password'),false);
  assert.equal((await other.request('/api/learner/signup',signup('learner.two'))).status,201);assert.equal((await school.prepare('SELECT COUNT(*) AS n FROM students').first()).n,2,'same names remain separate accounts');

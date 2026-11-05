@@ -6,3 +6,6 @@ dist/
 *.local
 .wrangler/
 .mf/
+
+# Owner payment assets are configured in R2, outside the public source.
+public/payments/

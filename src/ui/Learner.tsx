@@ -1,9 +1,10 @@
+import {SubscriptionBanner,type Subscription} from './Subscriptions';
 import {useEffect, useRef, useState, type FormEvent} from 'react';
 import {ArrowLeft, ArrowRight, BookOpen, CalendarDays, Check, CheckCircle2, Copy, Eye, EyeOff, FileText, GraduationCap, KeyRound, LogOut, ShieldCheck, UserRound, School, Phone, Mail, Sparkles} from 'lucide-react';
 import {api} from '../api';
 import {classes} from '../models';
 
-export interface Learner {id:string; username:string; displayName:string; classLevel:string; schoolName?:string; phone?:string; email?:string; createdAt:string}
+export interface Learner {id:string; username:string; displayName:string; classLevel:string; schoolName?:string; phone?:string; email?:string; createdAt:string;subscription?:Subscription}
 export type LearnerView = 'login'|'signup'|'account'|'recover';
 interface Props {
   view:LearnerView; learner:Learner|null; loading:boolean; sessionError:string;
@@ -43,7 +44,7 @@ function RecoveryCode({code,onDone,recovered=false}:{code:string;onDone:()=>void
   return <section className="recovery-panel panel" aria-labelledby="recovery-title"><span className="learner-icon"><KeyRound size={25}/></span><span className="eyebrow">{recovered?'PASSWORD RESET':'ACCOUNT CREATED'}</span><h1 id="recovery-title">Save your private recovery code.</h1><p>This code lets you reset a forgotten password without an email address. Keep it somewhere safe and private. It will only be shown now.</p><div className="recovery-code"><code>{code}</code><button className="button secondary" type="button" onClick={async()=>{try{await navigator.clipboard.writeText(code);setCopied(true);setCopyError('');}catch{setCopyError('Please write down the code or select it to copy.');}}}>{copied?<Check size={17}/>:<Copy size={17}/>} {copied?'Copied':'Copy code'}</button></div>{copyError&&<p role="status" className="field-help">{copyError}</p>}<p className="recovery-note"><ShieldCheck size={18}/>Anyone with this code can reset your password. Don’t share it.</p><label className="learner-checkbox"><input type="checkbox" checked={saved} onChange={e=>setSaved(e.target.checked)}/>I have saved my recovery code in a safe place.</label><button className="button" disabled={!saved} onClick={onDone}>{recovered?'Continue to login':'Continue to learning'}<ArrowRight size={18}/></button></section>;
 }
 
-function AuthStory(){return <aside className="auth-story"><span className="eyebrow"><GraduationCap size={18}/>YOUR NEXT CHAPTER</span><h2>A little curiosity.<br/><em>A world of learning.</em></h2><p>One learner account, for wherever your school journey takes you in Uganda.</p><div className="auth-school-photo"><img src="/images/classroom-uganda.jpg" width={1440} height={960} alt="Students studying in a classroom in Uganda"/><span><BookOpen size={18}/>Made for Ugandan learners</span></div><div className="auth-story-points"><span><CheckCircle2 size={17}/>Primary P1–P7</span><span><CheckCircle2 size={17}/>Secondary S1–S6</span><span><CheckCircle2 size={17}/>Free access for now</span></div></aside>;}
+function AuthStory(){return <aside className="auth-story"><span className="eyebrow"><GraduationCap size={18}/>YOUR NEXT CHAPTER</span><h2>A little curiosity.<br/><em>A world of learning.</em></h2><p>One learner account, for wherever your school journey takes you in Uganda.</p><div className="auth-school-photo"><img src="/images/classroom-uganda.jpg" width={1440} height={960} alt="Students studying in a classroom in Uganda"/><span><BookOpen size={18}/>Made for Ugandan learners</span></div><div className="auth-story-points"><span><CheckCircle2 size={17}/>Primary P1–P7</span><span><CheckCircle2 size={17}/>Secondary S1–S6</span><span><CheckCircle2 size={17}/>Flexible access plans</span></div></aside>;}
 
 function LearnerAccount({learner,onNavigate,onUpdated,onSignedOut}:{learner:Learner;onNavigate:Props['onNavigate'];onUpdated:Props['onUpdated'];onSignedOut:Props['onSignedOut']}) {
   const [displayName,setDisplayName]=useState(learner.displayName),[classLevel,setClassLevel]=useState(learner.classLevel),[currentPassword,setCurrentPassword]=useState(''),[newPassword,setNewPassword]=useState(''),[confirmation,setConfirmation]=useState(''),[busy,setBusy]=useState(''),[profileError,setProfileError]=useState(''),[passwordError,setPasswordError]=useState(''),[logoutError,setLogoutError]=useState(''),[saved,setSaved]=useState(false);
@@ -69,6 +70,7 @@ function LearnerAccount({learner,onNavigate,onUpdated,onSignedOut}:{learner:Lear
       </div>
       {logoutError && <p className="alert error" role="alert">{logoutError}</p>}
 
+      <SubscriptionBanner learner={learner} onNavigate={onNavigate}/>
       {/* Direct class shortcut */}
       <div className="learner-shortcuts">
         {[
@@ -124,7 +126,7 @@ function LearnerAccount({learner,onNavigate,onUpdated,onSignedOut}:{learner:Lear
 
       <div className="learner-free-note">
         <ShieldCheck size={21}/>
-        <p>Learning is free for now. Your learner account opens the full library of lessons, PDFs and quizzes.</p>
+        <p>Your account keeps your learning records. Full access to lessons, PDFs and quizzes requires an approved subscription.</p>
       </div>
     </section>
   );
@@ -465,7 +467,7 @@ export default function LearnerPages(props:Props){
 
             <div className="auth-free-note">
               <ShieldCheck size={17}/>
-              <span>Your registration details and quiz marks are saved with your account. Watch selected preview videos before signing up, then log in for all lessons, notes and quizzes.</span>
+              <span>Your registration details and quiz marks are saved with your account. Watch selected preview videos before signing up, then choose a subscription and submit your payment reference for full access.</span>
             </div>
 
           </div>

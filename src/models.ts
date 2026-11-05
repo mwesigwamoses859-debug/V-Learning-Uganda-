@@ -6,8 +6,8 @@ export interface Entry {
   level: Level; classLevel: string; subject: string; topic: string; teacherName: string;
   videoAssetId: string; pdfAssetId: string; coverAssetId: string; galleryAssetIds: string[];
   eventType: string; date: string; time: string; venue: string; questions: Question[];
-  access?: 'free'; priceUGX?: number; createdAt?: string; updatedAt?: string;
-  publicPreview?:boolean; requiresLogin?:boolean; hasVideo?:boolean; hasPDF?:boolean;
+  access?: 'free'|'subscription'; priceUGX?: number; createdAt?: string; updatedAt?: string;
+  publicPreview?:boolean; requiresLogin?:boolean; requiresSubscription?:boolean; hasVideo?:boolean; hasPDF?:boolean;
   lowDataVideoAssetId?:string; mediaInfo?:Record<string,{id:string;name:string;mime:string;size:number}>;
   examType?:''|'PLE'|'UCE'|'UACE'; examYear?:number|string; revisionType?:''|'paper'|'answers'|'revision';
   registrationOpen?:boolean; registrationCapacity?:number; registrationDeadline?:string; registeredParticipants?:number;

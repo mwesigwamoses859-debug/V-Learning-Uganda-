@@ -1,3 +1,4 @@
+import {grantTestSubscription} from './helpers/paid-fixture.mjs';
 import {build} from 'esbuild';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -8,7 +9,7 @@ const origin='https://learning.example',password='isolated member access test ph
 const runtime=()=>new Miniflare({modules:true,script,compatibilityDate:'2026-07-30',d1Databases:['DB'],r2Buckets:['MEDIA'],bindings:{ADMIN_PASSWORD:password}});
 function client(mf){let cookie='';return{async req(path,body,method,headers={}){const binary=body instanceof Uint8Array;const response=await mf.dispatchFetch(origin+path,{method:method||(body===undefined?'GET':'POST'),headers:{Origin:origin,Cookie:cookie,...(body===undefined||binary?{}:{'Content-Type':'application/json'}),...headers},...(body===undefined?{}:{body:binary?body:JSON.stringify(body)})});if(response.headers.has('set-cookie'))cookie=response.headers.get('set-cookie').split(';')[0];return response;}};}
 
-test('only selected preview videos are public; direct files and quizzes require a live account',async()=>{
+test('only selected preview videos are public; direct files and quizzes require an approved subscription',async()=>{
  const mf=runtime(),admin=client(mf),guest=client(mf),student=client(mf);
  const base={kind:'lesson',status:'published',title:'Isolated member lesson',description:'Private detailed content. '.repeat(30)+'PRIVATE_END',level:'primary',classLevel:'P7',subject:'Science',topic:'Plants'};
  async function upload(name,mime,bytes){const response=await admin.req('/api/uploads',{name,mime,size:bytes.length});assert.equal(response.status,201);const {id}=await response.json();assert.equal((await admin.req('/api/uploads/'+id,bytes,'PUT')).status,200);return id;}
@@ -36,6 +37,7 @@ test('only selected preview videos are public; direct files and quizzes require 
   for(const id of [lockedVideo,pdf])for(const [method,suffix,headers] of [['GET','',{}],['HEAD','',{}],['GET','',{Range:'bytes=0-4'}],['GET','?download=1',{}],['GET','',{Cookie:'vl_learner='+('f'.repeat(64))}]])assert.equal((await guest.req('/api/media/'+id+suffix,undefined,method,headers)).status,401);
   assert.equal((await guest.req('/api/quiz/'+quiz.id+'/grade',{answers:[1]})).status,401);
   assert.equal((await student.req('/api/learner/signup',{username:'access.student',displayName:'Student',classLevel:'P7',password})).status,201);
+  await grantTestSubscription(mf,'access.student');
   const full=(await (await student.req('/api/content')).json()).items.find(item=>item.id===quiz.id);
   assert.equal(full.requiresLogin,false);assert.equal(full.questions[0].question,'Private quiz question');assert.equal(full.questions[0].answer,undefined);
   assert.equal((await student.req('/api/media/'+lockedVideo)).status,200);

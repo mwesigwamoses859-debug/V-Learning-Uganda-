@@ -1,3 +1,4 @@
+import {grantTestSubscription} from './helpers/paid-fixture.mjs';
 import {build} from 'esbuild';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -18,6 +19,7 @@ test('saved learning, revision, notices, school bookings and management use real
  try{
   assert.equal((await admin.req('/api/login',{password})).status,200);
   for(const [user,name,cls] of [[alice,'learning.alice','P7'],[bob,'learning.bob','S4']])assert.equal((await user.req('/api/learner/signup',{username:name,displayName:name.split('.')[1],classLevel:cls,password})).status,201);
+  await grantTestSubscription(mf,'learning.alice');await grantTestSubscription(mf,'learning.bob');
   db=await mf.getD1Database('DB');video=await upload('lesson.mp4','video/mp4',1200);low=await upload('smaller.mp4','video/mp4',400);pdf=await upload('real-upload.pdf','application/pdf',300);
   base.coverAssetId=await upload('thumbnail.jpg','image/jpeg',80);
   lesson=await save({...base,videoAssetId:video,lowDataVideoAssetId:low,pdfAssetId:pdf});
