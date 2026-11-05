@@ -638,7 +638,7 @@ async function api(request, env) {
   if(path==='/api/plans'&&method==='GET')return json({plans:PLANS,merchant:merchantDetails(env)});
   if(path==='/api/payment-qr'&&['GET','HEAD'].includes(method)){
     need(merchantDetails(env).qr&&env.MEDIA,404,'Payment QR code is not available.');
-    const object=await env.MEDIA.get('payments/merchant-qr.jpeg');need(object,404,'Payment QR code is not available.');
+    const object=await env.MEDIA.get(String(env.PAYMENT_QR_OBJECT_KEY||'payments/merchant-qr.jpeg'));need(object,404,'Payment QR code is not available.');
     return new Response(method==='HEAD'?null:object.body,{headers:{'Content-Type':'image/jpeg','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
   }
   if (path.startsWith('/api/learner/')) return learnerAPI(request, env, path, method);
