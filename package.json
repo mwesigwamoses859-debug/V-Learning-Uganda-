@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "build": "tsc && vite build && node scripts/copy-worker.mjs",
+    "build": "npm test && tsc && vite build && node scripts/copy-worker.mjs",
     "preview": "vite preview",
     "test": "node --test tests/*.test.mjs"
   },

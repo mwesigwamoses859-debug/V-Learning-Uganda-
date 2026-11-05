@@ -1,3 +1,4 @@
+import {freeLessonSchema,freeLessonStatus,claimFreeLesson,hasFreeLesson,normaliseClass} from './free-lessons.mjs';
 import {initializeSchool, storeSchoolEvent} from './school-records.mjs';
 import {billingSchema, entitlement, subscriptionAPI, PLANS, merchantDetails} from './subscriptions.mjs';
 const CHUNK = 8 * 1024 * 1024;
@@ -5,6 +6,7 @@ const encoder = new TextEncoder();
 const schemaReady = new WeakMap();
 const schema = [
   ...billingSchema,
+  ...freeLessonSchema,
   `CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS school_sync_queue (id TEXT PRIMARY KEY, version TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS school_sync_state (id INTEGER PRIMARY KEY CHECK(id=1), last_success TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '')`,
@@ -52,9 +54,11 @@ function adminSetupIssue(env) {
 function configured(env) { return adminSetupIssue(env) === null; }
 async function initialize(db) {
   if (!schemaReady.has(db)) {
-    const operation = (async()=>{await db.batch(schema.map(sql => db.prepare(sql)));
+    const operation = (async()=>{
+      try{const marker=await db.prepare("SELECT value FROM app_settings WHERE key='free_lessons_registration_v1'").first();if(marker?.value==='ready')return;}catch(error){if(!String(error).includes('no such table'))throw error;}
+      await db.batch(schema.map(sql => db.prepare(sql)));
       const columns=(await db.prepare('PRAGMA table_info(learners)').all()).results.map(x=>x.name);
-      for(const column of ['school_name','phone','email'])if(!columns.includes(column)){
+      for(const column of ['school_name','phone','email','account_type'])if(!columns.includes(column)){
         try{await db.prepare(`ALTER TABLE learners ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`).run();}catch(error){if(!String(error).includes('duplicate column'))throw error;}
       }
       // Retain one existing lesson as a public preview when enabling account access.
@@ -63,6 +67,7 @@ async function initialize(db) {
         db.prepare(`UPDATE content SET data=json_set(data,'$.publicPreview',json('true')) WHERE id=(SELECT id FROM content WHERE kind='lesson' AND status='published' AND COALESCE(json_extract(data,'$.videoAssetId'),'')<>'' ORDER BY created_at DESC,id LIMIT 1) AND json_type(data,'$.publicPreview') IS NULL AND NOT EXISTS(SELECT 1 FROM app_settings WHERE key='member_access_v1')`),
         db.prepare(`INSERT INTO app_settings(key,value) VALUES('member_access_v1','enabled') ON CONFLICT(key) DO NOTHING`)
       ]);
+      await db.prepare("INSERT INTO app_settings(key,value) VALUES('free_lessons_registration_v1','ready') ON CONFLICT(key) DO NOTHING").run();
     })().catch(error => { schemaReady.delete(db); throw error; });
     schemaReady.set(db, operation);
   }
@@ -124,8 +129,9 @@ function validatePassword(value) {
 }
 function learnerProfile(input) {
   need(typeof input.displayName === 'string' && input.displayName.trim().length >= 2 && input.displayName.trim().length <= 80 && !/[\x00-\x1f\x7f]/.test(input.displayName), 400, 'Enter a first name or nickname with 2–80 characters.');
-  const classLevel = input.classLevel ?? '';
-  need(typeof classLevel === 'string' && (classLevel === '' || /^(P[1-7]|S[1-6])$/.test(classLevel)), 400, 'Choose a Primary or Secondary class, or leave the class open.');
+  const rawClass=input.classLevel??'';
+  const classLevel = rawClass===''?'':normaliseClass(rawClass);
+  need(typeof rawClass === 'string' && (rawClass === '' || /^(P[1-7]|S[1-6])$/.test(classLevel)), 400, 'Choose a Primary or Secondary class, or leave the class open.');
   const schoolName=typeof input.schoolName==='string'?input.schoolName.trim():'';
   const phone=typeof input.phone==='string'?input.phone.trim():'';
   const email=typeof input.email==='string'?input.email.trim().toLowerCase():'';
@@ -135,9 +141,9 @@ function learnerProfile(input) {
   return { displayName: input.displayName.trim(), classLevel,schoolName,phone,email };
 }
 function publicLearner(row) {
-  return { id: row.id, username: row.username, displayName: row.display_name, classLevel: row.class_level, schoolName:row.school_name||'', phone:row.phone||'', email:row.email||'', createdAt: row.created_at };
+  return { id: row.id, username: row.username, displayName: row.display_name, classLevel: row.class_level, accountType:row.account_type==='school'?'school':'student', schoolName:row.school_name||'', phone:row.phone||'', email:row.email||'', createdAt: row.created_at };
 }
-async function learnerAccount(env,row) { return {...publicLearner(row),subscription:await entitlement(env.DB,row.id)}; }
+async function learnerAccount(env,row) { const trial=await freeLessonStatus(env.DB,row.id);return {...publicLearner(row),subscription:await entitlement(env.DB,row.id),trial:{limit:trial.limit,used:trial.used,remaining:trial.remaining}}; }
 async function requireSubscription(env,row) { need((await entitlement(env.DB,row.id)).active,403,'Choose a subscription and submit your payment reference. Full access starts after administrator approval.'); }
 async function passwordKey(password, salt, iterations) {
   const key = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
@@ -267,14 +273,18 @@ async function learnerAPI(request, env, path, method) {
     await learnerRateLimit(request, env, 'signup', '', 3600000, 50);
     const input = await bodyJSON(request, 4096);
     need(input && typeof input === 'object' && !Array.isArray(input), 400, 'Enter your account details.');
-    const name = validateUsername(input.username); const profile = learnerProfile(input); const password = validatePassword(input.password);
+    const name = validateUsername(input.username); const accountType=input.accountType??'student';
+    need(['student','school'].includes(accountType),400,'Choose Student or School registration.');
+    const profile = learnerProfile({...input,...(accountType==='school'?{classLevel:''}:{})}); const password = validatePassword(input.password);
+    need(accountType==='school'||!!profile.classLevel,400,'Choose the student class. The school register uses this class automatically.');
+    need(accountType!=='school'||profile.schoolName.length>=2,400,'Enter the school name.');
     const exists = await env.DB.prepare('SELECT id FROM learners WHERE username = ?').bind(name).first();
     need(!exists, 409, 'That username is already taken. Try a different username or log in.');
     const id = crypto.randomUUID(); const now = new Date().toISOString(); const recoveryCode = newRecoveryCode();
     const passwordHash = await hashPassword(password); const recoveryHash = await recoveryDigest(recoveryCode);
-    const newRow={id,username:name,display_name:profile.displayName,class_level:profile.classLevel,school_name:profile.schoolName,phone:profile.phone,email:profile.email,created_at:now,updated_at:now};
+    const newRow={id,username:name,account_type:accountType,display_name:profile.displayName,class_level:profile.classLevel,school_name:profile.schoolName,phone:profile.phone,email:profile.email,created_at:now,updated_at:now};
     const [inserted] = await env.DB.batch([
-     env.DB.prepare('INSERT INTO learners(id,username,display_name,class_level,school_name,phone,email,password_hash,recovery_hash,credential_version,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT(username) DO NOTHING').bind(id,name,profile.displayName,profile.classLevel,profile.schoolName,profile.phone,profile.email,passwordHash,recoveryHash,now,now),
+     env.DB.prepare('INSERT INTO learners(id,username,display_name,class_level,school_name,phone,email,password_hash,recovery_hash,credential_version,created_at,updated_at,account_type) VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?) ON CONFLICT(username) DO NOTHING').bind(id,name,profile.displayName,profile.classLevel,profile.schoolName,profile.phone,profile.email,passwordHash,recoveryHash,now,now,accountType),
      queueSchool(env.DB,'learner:'+id,learnerEvent(newRow))
     ]);
     need(inserted.meta.changes === 1, 409, 'That username is already taken. Try a different username or log in.');
@@ -314,7 +324,9 @@ async function learnerAPI(request, env, path, method) {
     const input = await bodyJSON(request, 4096);
     need(input && typeof input === 'object' && !Array.isArray(input), 400, 'Enter your account details.');
     if (path.endsWith('/profile')) {
-      const profile = learnerProfile({...input,schoolName:input.schoolName??row.school_name,phone:input.phone??row.phone,email:input.email??row.email});
+      const profile = learnerProfile({...input,...(row.account_type==='school'?{classLevel:''}:{}),schoolName:input.schoolName??row.school_name,phone:input.phone??row.phone,email:input.email??row.email});
+      need(row.account_type==='school'||!!profile.classLevel,400,'Choose your student class.');
+      need(row.account_type!=='school'||profile.schoolName.length>=2,400,'Enter your school name.');
       const updated={...row,display_name:profile.displayName,class_level:profile.classLevel,school_name:profile.schoolName,phone:profile.phone,email:profile.email,updated_at:new Date().toISOString()};
       await env.DB.batch([
        env.DB.prepare('UPDATE learners SET display_name=?,class_level=?,school_name=?,phone=?,email=?,updated_at=? WHERE id=?').bind(profile.displayName,profile.classLevel,profile.schoolName,profile.phone,profile.email,updated.updated_at,row.id),
@@ -337,6 +349,15 @@ async function learnerAPI(request, env, path, method) {
     const result=await subscriptionAPI({request,env,path,method,learner,bodyJSON,need});
     if(result)return json(result,path==='/api/learner/payments'?201:200);
   }
+  const trialMatch=/^\/api\/learner\/free-lessons\/([a-f0-9-]{36})$/.exec(path);
+  if(trialMatch&&method==='POST'){
+    const learner=await learnerSession(request,env);need(learner,401,'Register or log in to use your five free video lessons.');
+    const entry=await publishedContent(env,trialMatch[1],'lesson');const data=JSON.parse(entry.data);
+    need(data.videoAssetId,404,'This video lesson is not available.');
+    const active=(await entitlement(env.DB,learner.id)).active;
+    if(!active){await learnerRateLimit(request,env,'free-lesson',learner.username,900000,120,60);await claimFreeLesson(env.DB,learner.id,entry.id,need);}
+    return json({item:(await catalog(env,[entry],false,active,true,learner.id))[0],learner:await learnerAccount(env,learner)});
+  }
   return learningLearnerAPI(request, env, path, method);
 }
 const text = (value, max = 200) => String(value ?? '').trim().slice(0, max);
@@ -345,22 +366,27 @@ function sanitize(entry, isAdmin = false) {
   if (!isAdmin && data.questions) data.questions = data.questions.map(({ question, options }) => ({ question, options }));
   return { ...data, id: entry.id, kind: entry.kind, status: entry.status, access: entry.kind==='lesson'&&data.publicPreview?'free':'subscription', priceUGX: 0, createdAt: entry.created_at, updatedAt: entry.updated_at };
 }
-async function catalog(env, rows, isAdmin = false, isMember = false, hasLearner = false) {
+async function catalog(env, rows, isAdmin = false, isMember = false, hasLearner = false, learnerId = '') {
   if (!rows.length) return [];
   const assetRows = await env.DB.prepare(`SELECT DISTINCT a.id,a.name,a.mime,a.size FROM assets a JOIN content_assets ca ON ca.asset_id=a.id JOIN content c ON c.id=ca.content_id WHERE a.state='ready' AND (a.mime LIKE 'video/%' OR a.mime='application/pdf') ${isAdmin ? '' : "AND c.status='published'"}`).all();
   const info = new Map(assetRows.results.map(asset => [asset.id, asset]));
   const registrations = await env.DB.prepare("SELECT event_id,SUM(participants) AS participants FROM event_registrations WHERE state='registered' GROUP BY event_id").all();
   const counts = new Map(registrations.results.map(row => [row.event_id, row.participants]));
+  const trial=await freeLessonStatus(env.DB,learnerId),claimed=new Set(trial.lessonIds);
   return rows.map(row => {
     const item = sanitize(row, isAdmin);
     item.publicPreview = item.kind === 'lesson' && item.publicPreview === true;
-    item.requiresSubscription = !isAdmin && !isMember && !item.publicPreview;
+    item.freeLesson = item.kind==='lesson'&&claimed.has(item.id);
+    item.hasFullAccess=isAdmin||isMember;
+    item.trialAvailable=!!learnerId&&!isMember&&item.kind==='lesson'&&!item.freeLesson&&!item.publicPreview&&trial.remaining>0;
+    item.trialRemaining=trial.remaining;
+    item.requiresSubscription = !isAdmin && !isMember && !item.publicPreview && !item.freeLesson;
     item.requiresLogin = item.requiresSubscription && !hasLearner;
     item.hasVideo = !!item.videoAssetId; item.hasPDF = !!item.pdfAssetId;
     if (!isAdmin && !isMember) {
       // The public catalog is a teaser; access to the underlying files is checked again.
       if (item.requiresSubscription) { item.videoAssetId='';item.lowDataVideoAssetId='';item.questions=[];item.galleryAssetIds=[];item.description=text(item.description,240); }
-      item.pdfAssetId='';
+      item.pdfAssetId='';item.questions=[];item.galleryAssetIds=[];
     }
     const ids = [item.videoAssetId, item.lowDataVideoAssetId, item.pdfAssetId].filter(Boolean);
     return { ...item, mediaInfo: Object.fromEntries(ids.filter(id => info.has(id)).map(id => [id, info.get(id)])), ...(item.kind === 'event' ? { registeredParticipants: counts.get(item.id) || 0 } : {}) };
@@ -433,8 +459,8 @@ async function learningLearnerAPI(request,env,path,method) {
     const progress = await env.DB.prepare("SELECT c.*,p.position,p.duration,p.completed,p.video_asset_id,p.updated_at AS progress_updated FROM learner_progress p JOIN content c ON c.id=p.content_id WHERE p.learner_id=? AND c.status='published' ORDER BY p.updated_at DESC").bind(row.id).all();
     const current = progress.results.filter(item => item.video_asset_id === JSON.parse(item.data).videoAssetId);
     const paid=(await entitlement(env.DB,row.id)).active;
-    const items = await catalog(env,current,false,paid,true);
-    return json({saved:await catalog(env,saved.results,false,paid,true),progress:items.map((item,i)=>({item,position:current[i].position,duration:current[i].duration,completed:!!current[i].completed,updatedAt:current[i].progress_updated})),completed:current.filter(item=>item.completed).length});
+    const items = await catalog(env,current,false,paid,true,row.id);
+    return json({saved:await catalog(env,saved.results,false,paid,true,row.id),progress:items.map((item,i)=>({item,position:current[i].position,duration:current[i].duration,completed:!!current[i].completed,updatedAt:current[i].progress_updated})),completed:current.filter(item=>item.completed).length});
   }
   const itemMatch = /^\/api\/learner\/(item|bookmarks|progress)\/([a-f0-9-]{36})$/.exec(path);
   if(itemMatch) {
@@ -445,7 +471,7 @@ async function learningLearnerAPI(request,env,path,method) {
       const progress = await env.DB.prepare('SELECT * FROM learner_progress WHERE learner_id=? AND content_id=?').bind(row.id,entry.id).first();
       return json({saved:!!bookmark,progress:progressItem(progress,entry)});
     }
-    if(method==='POST' && !(entry.kind==='lesson'&&data.publicPreview===true))await requireSubscription(env,row);
+    if(method==='POST' && !(entry.kind==='lesson'&&(data.publicPreview===true||await hasFreeLesson(env.DB,row.id,entry.id))))await requireSubscription(env,row);
     if(itemMatch[1]==='bookmarks' && method==='POST') {
       const input = await bodyJSON(request,1024); need(typeof input?.saved==='boolean',400,'Choose whether to save this material.');
       if(input.saved) await env.DB.prepare('INSERT INTO learner_bookmarks(learner_id,content_id,created_at) VALUES(?,?,?) ON CONFLICT(learner_id,content_id) DO NOTHING').bind(row.id,entry.id,new Date().toISOString()).run();
@@ -568,13 +594,18 @@ function verifyMagic(bytes, mime) {
 async function media(request, env, id) {
   const asset = await env.DB.prepare("SELECT * FROM assets WHERE id = ? AND state = 'ready'").bind(id).first();
   need(asset, 404, 'File not found.');
-  const published = (await env.DB.prepare("SELECT c.kind,c.data FROM content_assets ca JOIN content c ON c.id=ca.content_id WHERE ca.asset_id = ? AND c.status='published'").bind(id).all()).results;
+  const published = (await env.DB.prepare("SELECT c.id,c.kind,c.data FROM content_assets ca JOIN content c ON c.id=ca.content_id WHERE ca.asset_id = ? AND c.status='published'").bind(id).all()).results;
   const publicFile=published.some(row=>{const data=JSON.parse(row.data);return (asset.mime.startsWith('image/')&&data.coverAssetId===id)||(asset.mime.startsWith('video/')&&row.kind==='lesson'&&data.publicPreview===true&&[data.videoAssetId,data.lowDataVideoAssetId].includes(id));});
   if (!publicFile && !await session(request, env)) {
     need(published.length,404,'File not found.');
     const learner=await learnerSession(request,env);
     need(learner,401,'Sign up or log in to access this learning material.');
-    await requireSubscription(env,learner);
+    const paid=(await entitlement(env.DB,learner.id)).active;
+    if(!paid){
+      let trialAllowed=false;
+      if(asset.mime.startsWith('video/'))for(const entry of published){const data=JSON.parse(entry.data);if(entry.kind==='lesson'&&[data.videoAssetId,data.lowDataVideoAssetId].includes(id)&&await hasFreeLesson(env.DB,learner.id,entry.id)){trialAllowed=true;break;}}
+      need(trialAllowed,403,'Open this lesson from your account to use one of your five free video lessons, or subscribe for full access.');
+    }
   }
   need(env.MEDIA, 503, 'File storage is not connected yet.');
   const meta = await env.MEDIA.head(asset.object_key); need(meta, 404, 'File not found.');
@@ -639,7 +670,7 @@ async function api(request, env) {
     const rows = await env.DB.prepare("SELECT * FROM content WHERE status='published' ORDER BY created_at DESC LIMIT 500").all();
     const admin=!!await session(request,env),learner=await learnerSession(request,env);
     const member=admin||!!learner&&(await entitlement(env.DB,learner.id)).active;
-    return json({ items: await catalog(env,rows.results,false,member,!!learner), access: 'subscription' });
+    return json({ items: await catalog(env,rows.results,false,member,!!learner,learner?.id||''), access: 'subscription' });
   }
   const mediaMatch = /^\/api\/media\/([a-f0-9-]{36})$/.exec(path);
   if (mediaMatch && ['GET', 'HEAD'].includes(method)) return media(request, env, mediaMatch[1]);

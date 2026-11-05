@@ -4,7 +4,7 @@ import {ArrowLeft, ArrowRight, BookOpen, CalendarDays, Check, CheckCircle2, Copy
 import {api} from '../api';
 import {classes} from '../models';
 
-export interface Learner {id:string; username:string; displayName:string; classLevel:string; schoolName?:string; phone?:string; email?:string; createdAt:string;subscription?:Subscription}
+export interface Learner {id:string; username:string; displayName:string; classLevel:string; schoolName?:string; phone?:string; email?:string; createdAt:string;accountType?:'student'|'school';trial?:{limit:number;used:number;remaining:number};subscription?:Subscription}
 export type LearnerView = 'login'|'signup'|'account'|'recover';
 interface Props {
   view:LearnerView; learner:Learner|null; loading:boolean; sessionError:string;
@@ -138,9 +138,10 @@ export default function LearnerPages(props:Props){
   // Sign up fields required by user
   const [studentName, setStudentName] = useState('');
   const [schoolName, setSchoolName] = useState('');
+  const [accountType,setAccountType]=useState<'student'|'school'>('student');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
-  const [classLevel, setClassLevel] = useState('P7');
+  const [classLevel, setClassLevel] = useState('');
 
   // Login & auth states
   const [username, setUsername] = useState('');
@@ -159,7 +160,7 @@ export default function LearnerPages(props:Props){
   useEffect(() => {
     if (view === 'signup' && !customLogin) {
       const cleanName = studentName.trim().toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 10) || 'student';
-      const cleanClass = (classLevel || 'p7').toLowerCase();
+      const cleanClass = accountType==='school'?'school':(classLevel || 'student').toLowerCase();
       const randomSuffix = Math.floor(100 + Math.random() * 900);
       setUsername(`vl.${cleanClass}.${cleanName}.${randomSuffix}`);
       if (!password) {
@@ -168,7 +169,7 @@ export default function LearnerPages(props:Props){
         setConfirmation(uniquePassword);
       }
     }
-  }, [studentName, classLevel, view, customLogin]);
+  }, [studentName, classLevel, view, customLogin,accountType]);
 
   if(view==='account') {
     if(loading)return <section className="section account-loading" role="status">Opening your learner account…</section>;
@@ -189,7 +190,7 @@ export default function LearnerPages(props:Props){
       return;
     }
 
-    if(signup && !classLevel){
+    if(signup && accountType==='student' && !classLevel){
       setError('Please select your class so we can put you in that class to see your work.');
       return;
     }
@@ -207,8 +208,8 @@ export default function LearnerPages(props:Props){
           username: username.toLowerCase().trim(),
           password,
           displayName: finalDisplayName,
-          schoolName:schoolName.trim(),phone:phone.trim(),email:email.trim(),
-          classLevel
+          schoolName:schoolName.trim(),phone:phone.trim(),email:email.trim(),accountType,
+          classLevel:accountType==='school'?'':classLevel
         });
 
 
@@ -250,7 +251,7 @@ export default function LearnerPages(props:Props){
             <div className="auth-card-heading">
               <span className="learner-icon">{recover ? <KeyRound size={24}/> : <UserRound size={24}/>}</span>
               <span className="eyebrow">V-LEARNING UGANDA</span>
-              <h1>{signup ? 'Student Registration' : recover ? 'Find your way back.' : 'Student & Learner Sign In'}</h1>
+              <h1>{signup ? 'Student & School Registration' : recover ? 'Find your way back.' : 'Student & Learner Sign In'}</h1>
               <p>
                 {signup
                   ? 'Sign up to be placed directly in your class, receive your default student login, and see your syllabus work.'
@@ -287,8 +288,9 @@ export default function LearnerPages(props:Props){
                 {/* SIGN UP FIELDS */}
                 {signup && (
                   <>
+                    <label>Register as<select value={accountType} onChange={e=>setAccountType(e.target.value as 'student'|'school')}><option value="student">Student</option><option value="school">School account</option></select><small className="field-help">Both accounts receive five free full video lessons. School accounts can submit a bulk subscription for registered students.</small></label>
                     <label>
-                      Name of the Student <strong style={{color:'#be1373'}}>*</strong>
+                      {accountType==='school'?'School contact person':'Name of the Student'} <strong style={{color:'#be1373'}}>*</strong>
                       <input
                         name="studentName"
                         placeholder="e.g. Mukasa Ronald"
@@ -302,7 +304,7 @@ export default function LearnerPages(props:Props){
                     </label>
 
                     <label>
-                      School Where You Study <strong style={{color:'#be1373'}}>*</strong>
+                      {accountType==='school'?'School name':'School Where You Study'} <strong style={{color:'#be1373'}}>*</strong>
                       <input
                         name="schoolName"
                         placeholder="e.g. Kampala Parents School / Greenhill / Kitende"
@@ -314,7 +316,7 @@ export default function LearnerPages(props:Props){
                       />
                     </label>
 
-                    <ClassChoice value={classLevel} onChange={setClassLevel} required />
+                    <>{accountType==='student'&&<ClassChoice value={classLevel} onChange={setClassLevel} required />}</>
 
                     <label>
                       Phone Number <span className="optional-label">(if available — MTN or Airtel)</span>
@@ -358,7 +360,7 @@ export default function LearnerPages(props:Props){
                           Default Password: <code style={{color:'#24324b', background:'#fff', padding:'2px 6px', borderRadius:'4px'}}>{password}</code>
                         </div>
                         <div style={{marginTop:'4px', fontSize:'11px', color:'#167d7f'}}>
-                          ✓ You will be automatically placed in <strong>{classLevel || 'P7'}</strong> to see your lessons & revision work.
+                          {accountType==='school'?'Your school will appear automatically in the school management panel.':<>Your student record will be placed automatically in <strong>{classLevel}</strong>.</>} Five free video lessons are included.
                         </div>
                       </div>
                     </div>
@@ -442,9 +444,9 @@ export default function LearnerPages(props:Props){
 
                 <button className="button auth-submit" disabled={busy || loading}>
                   {busy
-                    ? (signup ? 'Enrolling in ' + classLevel + '…' : recover ? 'Resetting password…' : 'Logging in…')
+                    ? (signup ? accountType==='school'?'Registering school…':'Enrolling in ' + classLevel + '…' : recover ? 'Resetting password…' : 'Logging in…')
                     : signup
-                    ? `Sign Up & Enter ${classLevel || 'Class'}`
+                    ? accountType==='school'?'Register School':`Sign Up & Enter ${classLevel || 'Class'}`
                     : recover
                     ? 'Reset password'
                     : 'Log in'}

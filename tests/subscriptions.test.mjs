@@ -5,6 +5,8 @@ import {randomUUID} from 'node:crypto';
 import {Miniflare} from 'miniflare';
 const script=(await build({entryPoints:[new URL('../server/worker.mjs',import.meta.url).pathname],bundle:true,write:false,format:'esm',platform:'browser'})).outputFiles[0].text;
 const origin='https://learning.test',password='isolated billing fixture phrase';
+function nextMonth(value){const d=new Date(value+10800000),year=d.getUTCFullYear(),month=d.getUTCMonth();return Date.UTC(year,month+1,Math.min(d.getUTCDate(),new Date(Date.UTC(year,month+2,0)).getUTCDate()),d.getUTCHours(),d.getUTCMinutes(),d.getUTCSeconds(),d.getUTCMilliseconds())-10800000;}
+
 function client(mf){let cookie='';return {async req(path,body,method,headers={}){const binary=body instanceof Uint8Array;const r=await mf.dispatchFetch(origin+path,{method:method||(body===undefined?'GET':'POST'),headers:{Origin:origin,Cookie:cookie,'CF-Connecting-IP':'192.0.2.14',...(body===undefined||binary?{}:{'Content-Type':'application/json'}),...headers},...(body===undefined?{}:{body:binary?body:JSON.stringify(body)})});if(r.headers.has('set-cookie'))cookie=r.headers.get('set-cookie').split(';')[0];return r;}};}
 test('manual payments grant the paid duration only after verified, atomic administrator approval',async t=>{
  const mf=new Miniflare({modules:true,script,compatibilityDate:'2026-07-30',d1Databases:['DB'],r2Buckets:['MEDIA'],bindings:{ADMIN_PASSWORD:password,PAYMENT_MERCHANT_CODE:'0000000',PAYMENT_MERCHANT_NAME:'Isolated Test Merchant',PAYMENT_QR_READY:'true'}});
@@ -16,7 +18,7 @@ test('manual payments grant the paid duration only after verified, atomic admini
  async function upload(name,mime,bytes){const r=await admin.req('/api/uploads',{name,mime,size:bytes.length});assert.equal(r.status,201);const {id}=await r.json();assert.equal((await admin.req('/api/uploads/'+id,bytes,'PUT')).status,200);return id;}
  try{
   await t.test('plans have the requested prices and public payment destination',async()=>{
-   const plans=await (await guest.req('/api/plans')).json();assert.equal(plans.plans.weekly.amountUGX,10000);assert.equal(plans.plans.weekly.days,7);assert.equal(plans.plans.monthly.amountUGX,30000);assert.equal(plans.plans.monthly.days,30);assert.equal(plans.plans.school.amountUGX,20000);assert.equal(plans.merchant.code,'0000000');
+   const plans=await (await guest.req('/api/plans')).json();assert.equal(plans.plans.weekly.amountUGX,10000);assert.equal(plans.plans.weekly.days,7);assert.equal(plans.plans.monthly.amountUGX,30000);assert.equal(plans.plans.monthly.months,1);assert.equal(plans.plans.school.amountUGX,20000);assert.equal(plans.merchant.code,'0000000');
    assert.equal(plans.merchant.qr,'/api/payment-qr');assert.equal((await guest.req('/api/payment-qr')).status,404);
    const bucket=await mf.getR2Bucket('MEDIA');await bucket.put('payments/merchant-qr.jpeg',new Uint8Array([255,216,255,0]));
    const qr=await guest.req('/api/payment-qr');assert.equal(qr.status,200);assert.equal(qr.headers.get('Content-Type'),'image/jpeg');
@@ -48,16 +50,16 @@ test('manual payments grant the paid duration only after verified, atomic admini
    const paid=(await (await alice.req('/api/content')).json()).items.find(i=>i.kind==='quiz');assert.equal(paid.requiresSubscription,false);assert.equal(paid.questions[0].answer,undefined);assert.equal((await alice.req('/api/media/'+video)).status,200);assert.equal((await alice.req('/api/quiz/'+quiz+'/grade',{answers:[1]})).status,200);
   });
   await t.test('monthly renewals extend remaining paid time and replaying a reference adds nothing',async()=>{
-   const previous=Date.parse((await state()).subscription.expiresAt);const monthly=await submit(alice,{...payment,plan:'monthly',reference:'AIRTEL-TEST-MONTH'});assert.equal(monthly.amountUGX,30000);await approve(monthly);assert.equal(Date.parse((await state()).subscription.expiresAt),previous+30*86400000);
+   const previous=Date.parse((await state()).subscription.expiresAt);const monthly=await submit(alice,{...payment,plan:'monthly',reference:'AIRTEL-TEST-MONTH'});assert.equal(monthly.amountUGX,30000);await approve(monthly);assert.equal(Date.parse((await state()).subscription.expiresAt),nextMonth(previous));
    assert.equal((await alice.req('/api/learner/payments',{...payment,plan:'school',schoolName:'A School',usernames:['billing.alice','billing.bob']})).status,409);
   });
   await t.test('school rosters validate registered unique learners and charge per actual student',async()=>{
    const input={...payment,plan:'school',reference:'AIRTEL-TEST-SCHOOL',schoolName:'Isolated Test School'};
-   for(const usernames of [['billing.alice'],['billing.alice','BILLING.ALICE'],['billing.alice','missing.student']])assert.equal((await school.req('/api/learner/payments',{...input,usernames})).status,400);
+   for(const usernames of [[],['billing.alice','BILLING.ALICE'],['billing.alice','missing.student']])assert.equal((await school.req('/api/learner/payments',{...input,usernames})).status,400);
    assert.equal((await school.req('/api/learner/payments',{...input,plan:['monthly']})).status,400);
    assert.equal((await school.req('/api/learner/payments',{...input,usernames:['billing.alice','billing.bob']},'POST',{Origin:'https://foreign.test'})).status,403);
    schoolPayment=await submit(school,{...input,usernames:['BILLING.ALICE','billing.bob'],amountUGX:20000,seats:1});assert.equal(schoolPayment.seats,2);assert.equal(schoolPayment.amountUGX,40000);const before=Date.parse((await state()).subscription.expiresAt);await approve(schoolPayment);
-   const grants=(await db.prepare('SELECT * FROM subscription_grants WHERE payment_id=? ORDER BY learner_id').bind(schoolPayment.id).all()).results;assert.equal(grants.length,2);assert.deepEqual(grants.map(g=>g.learner_id).sort(),[aliceId,bobId].sort());assert.equal(Date.parse((await state()).subscription.expiresAt),before+30*86400000);assert.equal((await state(bob)).subscription.active,true);assert.equal((await state(school)).subscription.active,false,'only named beneficiaries receive access');
+   const grants=(await db.prepare('SELECT * FROM subscription_grants WHERE payment_id=? ORDER BY learner_id').bind(schoolPayment.id).all()).results;assert.equal(grants.length,2);assert.deepEqual(grants.map(g=>g.learner_id).sort(),[aliceId,bobId].sort());assert.equal(Date.parse((await state()).subscription.expiresAt),nextMonth(before));assert.equal((await state(bob)).subscription.active,true);assert.equal((await state(school)).subscription.active,false,'only named beneficiaries receive access');
   });
   await t.test('a rejected payment never grants access and its review is private to its owner',async()=>{
    const p=await submit(school,{...payment,plan:'monthly',reference:'AIRTEL-TEST-REJECT'});
@@ -65,6 +67,11 @@ test('manual payments grant the paid duration only after verified, atomic admini
    assert.equal((await admin.req('/api/admin/payments/'+p.id+'/review',{action:'reject',note:'Reference not found in merchant statement.'})).status,200);assert.equal((await state(school)).payments[0].reviewNote,'Reference not found in merchant statement.');assert.equal((await state(school)).subscription.active,false);
    assert.equal((await admin.req('/api/admin/payments/'+p.id+'/review',{action:'approve',verifiedReceived:true,receivedAmountUGX:30000})).status,409);assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM subscription_grants WHERE learner_id=?').bind(schoolId).first()).n,0);
    assert.equal(JSON.stringify(await state(bob)).includes('AIRTEL-TEST-REJECT'),false);
+  });
+  await t.test('monthly access clamps to the last day of the next month in Uganda time',async()=>{
+   await db.prepare('UPDATE subscription_grants SET expires_at=? WHERE learner_id=?').bind(Date.parse('2099-01-31T20:30:00.123Z'),bobId).run();
+   const p=await submit(bob,{...payment,plan:'monthly',reference:'AIRTEL-CALENDAR-BOUNDARY'});await approve(p);
+   assert.equal((await state(bob)).subscription.expiresAt,'2099-02-28T20:30:00.123Z');
   });
   await t.test('expiry removes protected catalog, direct files, ranges, downloads and quiz access',async()=>{
    await db.prepare('UPDATE subscription_grants SET starts_at=?,expires_at=? WHERE learner_id=?').bind(Date.now()-86400000,Date.now()-1,aliceId).run();assert.equal((await state()).subscription.active,false);

@@ -50,7 +50,7 @@ test('real learner lifecycle is durable, private and separate from administratio
       assert.equal(row.recovery_hash,hash('vl-learner-recovery:'+recoveryCode.replaceAll('-','')));
       assert.equal(JSON.stringify(row).includes(password),false);assert.equal(JSON.stringify(row).includes(recoveryCode),false);
       const token=alice.cookie.split('=')[1];const session=await db.prepare('SELECT * FROM learner_sessions WHERE learner_id=?').bind(learnerId).first();assert.equal(session.token_hash,hash(token));assert.notEqual(session.token_hash,token);
-      const current=await (await alice.request('/api/learner/session')).json();assert.equal(current.learner.id,learnerId);assert.deepEqual(Object.keys(current.learner).sort(),['classLevel','createdAt','displayName','email','id','phone','schoolName','subscription','username']);
+      const current=await (await alice.request('/api/learner/session')).json();assert.equal(current.learner.id,learnerId);assert.deepEqual(Object.keys(current.learner).sort(),['accountType','classLevel','createdAt','displayName','email','id','phone','schoolName','subscription','trial','username']);
       assert.equal((await other.request('/api/learner/signup',signup('SCHOOL.LEARNER'))).status,409);
     });
     await t.test('learner sessions cannot access drafts, admin data or uploads',async()=>{

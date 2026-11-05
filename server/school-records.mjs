@@ -1,6 +1,7 @@
 // Shared contract: only backend code can write school records through its D1 binding.
 const ready = new WeakMap();
 export const schoolSchema = [
+ `CREATE TABLE IF NOT EXISTS vlearning_schools (account_id TEXT PRIMARY KEY,username TEXT NOT NULL,school_name TEXT NOT NULL,contact_name TEXT NOT NULL,phone TEXT NOT NULL DEFAULT '',email TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL,updated_at TEXT NOT NULL)`,
  `CREATE TABLE IF NOT EXISTS vlearning_students (learner_id TEXT PRIMARY KEY, student_id TEXT NOT NULL UNIQUE, username TEXT NOT NULL, display_name TEXT NOT NULL, class_level TEXT NOT NULL, school_name TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
  `CREATE INDEX IF NOT EXISTS vlearning_student_class ON vlearning_students(class_level, display_name)`,
  `CREATE TABLE IF NOT EXISTS vlearning_quiz_results (id TEXT PRIMARY KEY, learner_id TEXT NOT NULL, content_id TEXT NOT NULL, submission_id TEXT NOT NULL, title TEXT NOT NULL, subject TEXT NOT NULL, topic TEXT NOT NULL, class_level TEXT NOT NULL, correct INTEGER NOT NULL, total INTEGER NOT NULL CHECK(total>0), percentage REAL NOT NULL, created_at TEXT NOT NULL, UNIQUE(learner_id,submission_id))`,
@@ -17,6 +18,11 @@ export async function storeSchoolEvent(db, event) {
  await initializeSchool(db);
  if(event.kind==='learner') {
   const l=event.learner, id='vl-'+l.id;
+  if(l.accountType==='school'){
+    await db.prepare("INSERT INTO vlearning_schools(account_id,username,school_name,contact_name,phone,email,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET username=excluded.username,school_name=excluded.school_name,contact_name=excluded.contact_name,phone=excluded.phone,email=excluded.email,updated_at=excluded.updated_at WHERE excluded.updated_at>=vlearning_schools.updated_at").bind(l.id,l.username,l.schoolName||'',l.displayName,l.phone||'',l.email||'',l.createdAt,l.updatedAt).run();
+    await db.prepare("INSERT INTO school_connection(id,last_synced_at) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET last_synced_at=excluded.last_synced_at").bind(new Date().toISOString()).run();
+    return;
+  }
   const old=await db.prepare('SELECT payload FROM students WHERE id=?').bind(id).first();
   const previous=old?JSON.parse(old.payload):{};
   const parts=l.displayName.trim().split(/\s+/);

@@ -1,7 +1,7 @@
 export const PLANS = {
   weekly: {name:'Weekly student', amountUGX:10000, days:7},
-  monthly: {name:'Monthly student', amountUGX:30000, days:30},
-  school: {name:'School group', amountUGX:20000, days:30},
+  monthly: {name:'Monthly student', amountUGX:30000, months:1},
+  school: {name:'School group', amountUGX:20000, months:1},
 };
 export function merchantDetails(env) {
   const code=String(env.PAYMENT_MERCHANT_CODE||'').trim(),name=String(env.PAYMENT_MERCHANT_NAME||'').trim();
@@ -46,11 +46,11 @@ export async function subscriptionAPI({request,env,path,method,learner,isAdmin,b
     let recipients=[learner.id];
     if(input.plan==='school') {
       need(schoolName.length>=2&&!/[\x00-\x1f\x7f]/.test(schoolName),400,'Enter the school name.');
-      need(Array.isArray(input.usernames)&&input.usernames.length>=2&&input.usernames.length<=200,400,'Include 2–200 registered student usernames per school payment.');
+      need(Array.isArray(input.usernames)&&input.usernames.length>=1&&input.usernames.length<=200,400,'Include 1–200 registered student usernames per school payment.');
       const usernames=input.usernames.map(name=>clean(name,31).toLowerCase());
       need(usernames.every(name=>/^[a-z0-9][a-z0-9._-]{2,29}$/.test(name))&&new Set(usernames).size===usernames.length,400,'Use each registered student username once.');
-      const found=await env.DB.prepare('SELECT id FROM learners WHERE username IN (SELECT value FROM json_each(?))').bind(JSON.stringify(usernames)).all();
-      need(found.results.length===usernames.length,400,'Every student on the list must sign up first. Check the usernames before paying.');
+      const found=await env.DB.prepare("SELECT id FROM learners WHERE username IN (SELECT value FROM json_each(?)) AND account_type<>'school'").bind(JSON.stringify(usernames)).all();
+      need(found.results.length===usernames.length,400,'Every name on the list must be a registered student account. Check the usernames before paying.');
       recipients=found.results.map(row=>row.id);
     }
     const id=crypto.randomUUID(),createdAt=new Date().toISOString();
@@ -69,7 +69,7 @@ export async function subscriptionAPI({request,env,path,method,learner,isAdmin,b
     need(['all','pending','approved','rejected'].includes(status),400,'Choose a valid payment status.');
     const page=Math.max(1,Math.min(100000,Number.parseInt(url.searchParams.get('page'))||1));
     const where=status==='all'?'':'WHERE p.status=?',args=status==='all'?[]:[status];
-    const rows=await env.DB.prepare(`SELECT p.*,l.username,l.display_name FROM payment_requests p JOIN learners l ON l.id=p.learner_id ${where} ORDER BY p.created_at DESC,p.id LIMIT 50 OFFSET ?`).bind(...args,(page-1)*50).all();
+    const rows=await env.DB.prepare(`SELECT p.*,l.username,l.display_name FROM payment_requests p JOIN learners l ON l.id=p.learner_id ${where} ORDER BY p.created_at DESC,p.id LIMIT 25 OFFSET ?`).bind(...args,(page-1)*25).all();
     const total=await env.DB.prepare(`SELECT COUNT(*) AS count FROM payment_requests p ${where}`).bind(...args).first();
     const items=[];
     for(const row of rows.results) {
@@ -92,13 +92,13 @@ export async function subscriptionAPI({request,env,path,method,learner,isAdmin,b
       need(changed.meta.changes===1,409,'This request has already been reviewed.');
     }else{
       need(input.verifiedReceived===true&&input.receivedAmountUGX===row.amount_ugx,400,'Verify receipt in the Airtel merchant account and enter the exact amount received.');
-      const nonce=crypto.randomUUID(),duration=PLANS[row.plan].days*86400000;
+      const nonce=crypto.randomUUID(),duration=PLANS.weekly.days*86400000;
       // The status claim and all student grants commit in one D1 transaction.
       // A unique claim nonce prevents concurrent reviewers from extending access twice.
       // Renewal starts after any remaining paid time; separate approvals serialize in D1.
       const [changed]=await env.DB.batch([
         env.DB.prepare("UPDATE payment_requests SET status='approved',review_note=?,reviewed_at=?,approval_nonce=? WHERE id=? AND status='pending'").bind(note,reviewedAt,nonce,id),
-        env.DB.prepare(`INSERT INTO subscription_grants(payment_id,learner_id,plan,starts_at,expires_at) SELECT p.id,b.learner_id,p.plan,MAX(?,COALESCE((SELECT MAX(g.expires_at) FROM subscription_grants g WHERE g.learner_id=b.learner_id),0)),MAX(?,COALESCE((SELECT MAX(g.expires_at) FROM subscription_grants g WHERE g.learner_id=b.learner_id),0))+? FROM payment_requests p JOIN payment_beneficiaries b ON b.payment_id=p.id WHERE p.id=? AND p.approval_nonce=? ON CONFLICT(payment_id,learner_id) DO NOTHING`).bind(now,now,duration,id,nonce),
+        env.DB.prepare("INSERT INTO subscription_grants(payment_id,learner_id,plan,starts_at,expires_at) SELECT id,learner_id,plan,base,CASE WHEN plan='weekly' THEN base+? ELSE CAST(strftime('%s',base/1000,'unixepoch','+3 hours','+1 month','floor','-3 hours') AS INTEGER)*1000+(base%1000) END FROM (SELECT p.id,b.learner_id,p.plan,MAX(?,COALESCE((SELECT MAX(g.expires_at) FROM subscription_grants g WHERE g.learner_id=b.learner_id),0)) AS base FROM payment_requests p JOIN payment_beneficiaries b ON b.payment_id=p.id WHERE p.id=? AND p.approval_nonce=?) WHERE 1 ON CONFLICT(payment_id,learner_id) DO NOTHING").bind(duration,now,id,nonce),
       ]);
       need(changed.meta.changes===1,409,'This request has already been reviewed. Refresh the payment list.');
     }
